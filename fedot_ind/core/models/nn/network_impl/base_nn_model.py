@@ -1,6 +1,6 @@
 import copy
 import os
-from typing import Optional
+from typing import Optional, Union
 
 import torch
 import torch.nn.functional as F
@@ -28,14 +28,12 @@ class BaseNeuralModel:
     Example:
         To use this operation you can create pipeline as follows::
             from fedot.core.pipelines.pipeline_builder import PipelineBuilder
-            from examples.fedot.fedot_ex import init_input_data
             from fedot_ind.tools.loader import DataLoader
             from fedot_ind.core.repository.initializer_industrial_models import IndustrialModels
 
             train_data, test_data = DataLoader(dataset_name='Ham').load_data()
             with IndustrialModels():
                 pipeline = PipelineBuilder().add_node('resnet_model').add_node('rf').build()
-                input_data = init_input_data(train_data[0], train_data[1])
                 pipeline.fit(input_data)
                 features = pipeline.predict(input_data)
                 print(features)
@@ -65,13 +63,14 @@ class BaseNeuralModel:
             loss_fn = None
         return loss_fn
 
-    def fit(self, input_data: InputData):
-        self.num_classes = input_data.num_classes
-        self.target = input_data.target
-        self.task_type = input_data.task
-        self.is_regression_task = self.task_type.task_type.value == 'regression'
+    def fit(self, input_data: Union[tuple, InputData]):
+        if isinstance(input_data, InputData):
+            self.num_classes = input_data.num_classes
+            self.target = input_data.target
+            self.task_type = input_data.task
+            self.is_regression_task = self.task_type.task_type.value == 'regression'
         self._fit_model(input_data)
-        self._save_and_clear_cache()
+        # self._save_and_clear_cache()
         return self
 
     @convert_to_4d_torch_array
@@ -91,26 +90,28 @@ class BaseNeuralModel:
         raise NotImplementedError()
 
     def _prepare_data(self, ts, split_data: bool = True):
-
-        if split_data:
-            train_data, val_data = train_test_data_setup(
-                ts, stratify=True, shuffle_flag=True, split_ratio=0.7)
-            train_dataset = self._create_dataset(train_data)
-            val_dataset = self._create_dataset(val_data)
+        if isinstance(ts, tuple):
+            return ts[0], ts[1]
         else:
-            train_dataset = self._create_dataset(ts)
-            val_dataset = None
+            if split_data:
+                train_data, val_data = train_test_data_setup(
+                    ts, stratify=True, shuffle_flag=True, split_ratio=0.7)
+                train_dataset = self._create_dataset(train_data)
+                val_dataset = self._create_dataset(val_data)
+            else:
+                train_dataset = self._create_dataset(ts)
+                val_dataset = None
 
-        train_loader = torch.utils.data.DataLoader(
-            train_dataset, batch_size=self.batch_size, shuffle=True)
+            train_loader = torch.utils.data.DataLoader(
+                train_dataset, batch_size=self.batch_size, shuffle=True)
 
-        if val_dataset is None:
-            val_loader = val_dataset
-        else:
-            val_loader = torch.utils.data.DataLoader(
-                val_dataset, batch_size=self.batch_size, shuffle=True)
+            if val_dataset is None:
+                val_loader = val_dataset
+            else:
+                val_loader = torch.utils.data.DataLoader(
+                    val_dataset, batch_size=self.batch_size, shuffle=True)
 
-        self.label_encoder = train_dataset.label_encoder
+            self.label_encoder = train_dataset.label_encoder
         return train_loader, val_loader
 
     def _train_loop(self, train_loader, val_loader, loss_fn, optimizer):
@@ -207,12 +208,12 @@ class BaseNeuralModel:
 
     def _convert_predict(self, pred, output_mode: str = 'labels'):
         have_encoder = all([self.label_encoder is not None, output_mode == 'labels'])
-        output_is_clf_labels = all([not self.is_regression_task, output_mode == 'labels'])
+        output_is_clf_labels = output_mode == 'labels' and self.is_regression_task
 
-        pred = pred.cpu().detach().numpy() if self.is_regression_task else F.softmax(pred, dim=1)
-        y_pred = torch.argmax(pred, dim=1).cpu().detach().numpy() if output_is_clf_labels else pred
+        pred = pred if self.is_regression_task else F.softmax(pred, dim=1)
+        y_pred = torch.argmax(pred, dim=1) if output_is_clf_labels else pred
         y_pred = self.label_encoder.inverse_transform(y_pred) if have_encoder else y_pred
-
+        y_pred = y_pred.cpu().detach().numpy()
         predict = OutputData(
             idx=np.arange(len(y_pred)),
             task=self.task_type,

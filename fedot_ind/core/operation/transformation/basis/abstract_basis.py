@@ -1,11 +1,12 @@
 from typing import Optional, Union
 
+import dask
 import pandas as pd
 from fedot.core.data.data import InputData
 from fedot.core.operations.operation_parameters import OperationParameters
-from joblib import delayed, Parallel
 from pymonad.either import Either
 from pymonad.list import ListMonad
+from tqdm.dask import TqdmCallback
 
 from fedot_ind.core.architecture.preprocessing.data_convertor import DataConverter, NumpyConverter
 from fedot_ind.core.architecture.settings.computational import backend_methods as np
@@ -73,11 +74,10 @@ class BasisDecompositionImplementation(
 
         """
         features = DataConverter(data=input_data).convert_to_monad_data()
-        parallel = Parallel(n_jobs=self.n_processes,
-                            verbose=0, pre_dispatch="2*n_jobs")
-        v = parallel(delayed(self._transform_one_sample)(sample)
-                     for sample in features)
-        predict = NumpyConverter(data=np.array(v)).convert_to_torch_format()
+        evaluation_results = list(map(lambda sample: self._transform_one_sample(sample), features))
+        with TqdmCallback(desc=f"compute_transformation_to_{self.__repr__()}"):
+            evaluation_results = dask.compute(*evaluation_results)
+        predict = NumpyConverter(data=np.array(evaluation_results)).convert_to_torch_format()
         return predict
 
     def _get_multidim_basis(self, input_data):

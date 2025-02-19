@@ -1,7 +1,10 @@
+from contextlib import contextmanager
+from typing import Optional, Callable
 from weakref import WeakValueDictionary
 
 from distributed import Client, LocalCluster
 from fedot.core.data.data import InputData
+from fedot.core.operations.operation_parameters import OperationParameters
 from fedot.core.repository.dataset_types import DataTypesEnum
 
 from fedot_ind.core.architecture.preprocessing.data_convertor import CustomDatasetCLF, CustomDatasetTS, DataConverter, \
@@ -30,12 +33,15 @@ def fedot_data_type(func):
 def convert_to_4d_torch_array(func):
     def decorated_func(self, *args):
         init_data = args[0]
-        data = DataConverter(data=init_data).convert_to_4d_torch_format()
-        if isinstance(init_data, InputData):
-            init_data.features = data
+        if isinstance(init_data, tuple):
+            return func(self, init_data)
         else:
-            init_data = data
-        return func(self, init_data)
+            data = DataConverter(data=init_data).convert_to_4d_torch_format()
+            if isinstance(init_data, InputData):
+                init_data.features = data
+            else:
+                init_data = data
+            return func(self, init_data)
 
     return decorated_func
 
@@ -49,6 +55,7 @@ def convert_to_3d_torch_array(func):
         else:
             init_data = data
         return func(self, init_data, *args[1:])
+
     return decorated_func
 
 
@@ -64,6 +71,7 @@ def convert_inputdata_to_torch_time_series_dataset(func):
     def decorated_func(self, *args):
         ts = args[0]
         return func(self, CustomDatasetTS(ts))
+
     return decorated_func
 
 
@@ -110,12 +118,38 @@ class Singleton(type):
 
 
 class DaskServer(metaclass=Singleton):
-    def __init__(self):
+    def __init__(self, params: Optional[OperationParameters] = None):
         print('Creating Dask Server')
-        cluster = LocalCluster(processes=False,
-                               # n_workers=4,
-                               # threads_per_worker=4,
-                               # memory_limit='3GB'
-                               )
+        cluster_params = params.get('cluster_params', dict(processes=False,
+                                                           n_workers=1,
+                                                           threads_per_worker=4,
+                                                           memory_limit='auto'
+                                                           ))
+        cluster = LocalCluster(**cluster_params)
         # connect client to your cluster
         self.client = Client(cluster)
+        self.cluster = cluster
+
+
+@contextmanager
+def exception_handler(*exception_types, on_exception: Optional[Callable] = None, suppress: bool = True):
+    """
+    A context manager that wraps code with a try-except block.
+
+    Args:
+        *exception_types (tuple): The types of exceptions to catch (e.g., ValueError, TypeError).
+        on_exception (callable, optional): A function to call when an exception is caught.
+        suppress (bool, optional): If True, suppresses the exception after handling it.
+            If False, re-raises the exception after handling it. Defaults to True.
+
+    Returns:
+        None: This context manager does not return any value directly.
+              However, it controls the flow of execution within the `with` block.
+    """
+    try:
+        yield  # Executes the code within the 'with' block
+    except exception_types:
+        if on_exception:
+            on_exception()  # Call the provided callback function
+        if not suppress:
+            raise  # Re-raise the exception if suppression is disabled

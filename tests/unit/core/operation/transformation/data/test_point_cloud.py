@@ -30,7 +30,10 @@ def test_TopologicalTransformation_time_series_rolling_betti_ripser(
         max_simplex_dim=1,
         epsilon=3,
         window_length=400)
-    assert len(topological_transformer.time_series_rolling_betti_ripser(basic_periodic_data)) != 0
+
+    betti_sum = topological_transformer.time_series_rolling_betti_ripser(basic_periodic_data)
+
+    assert len(betti_sum) != 0
 
 
 def test_TopologicalTransformation_time_series_to_point_cloud(

@@ -2,7 +2,7 @@ from fedot_ind.core.architecture.settings.computational import backend_methods a
 from fedot_ind.core.repository.constanst_repository import SINGULAR_VALUE_BETA_THR, SINGULAR_VALUE_MEDIAN_THR
 
 
-def sv_to_explained_variance_ratio(singular_values, dispersion_by_component):
+def sv_to_explained_variance_ratio(singular_values):
     """Calculate the explained variance ratio of the singular values.
 
     Args:
@@ -16,10 +16,8 @@ def sv_to_explained_variance_ratio(singular_values, dispersion_by_component):
     """
     singular_values = [abs(x) for x in singular_values]
     n_components = [x / sum(singular_values) * 100 for x in singular_values]
-    n_components = [x for x in n_components if x > dispersion_by_component]
-    explained_variance = sum(n_components)
-    n_components = len(n_components)
-    return explained_variance, n_components
+    n_components = [x for x in n_components if x > 3]
+    return n_components
 
 
 def transform_eigen_to_ts(X_elem):
@@ -126,7 +124,8 @@ def singular_value_hard_threshold(singular_values,
 
 
 def reconstruct_basis(U, Sigma, VT, ts_length):
-    if Sigma == 'ill_conditioned':
+    # check whether Sigma value is set to 'ill_conditioned'
+    if isinstance(Sigma, str):
         # rank = round(len(VT)*0.1)
         rank = len(VT)
         TS_comps = np.zeros((ts_length, rank))

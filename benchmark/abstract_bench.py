@@ -23,7 +23,7 @@ class AbstractBenchmark(object):
             **kwargs: Additional arguments that may be required by the
                 benchmark.
         """
-        self.output_dir = output_dir
+        self.result_dir = output_dir
         self.kwargs = kwargs
         self.logger = logging.getLogger(self.__class__.__name__)
         self._create_output_dir()
@@ -33,7 +33,7 @@ class AbstractBenchmark(object):
         raise NotImplementedError()
 
     def _create_output_dir(self):
-        os.makedirs(self.output_dir, exist_ok=True)
+        os.makedirs(self.result_dir, exist_ok=True)
 
     def _create_report(self, results):
         """Create a report from the results of the benchmark.
@@ -57,10 +57,8 @@ class AbstractBenchmark(object):
     def evaluate_loop(self, dataset, experiment_setup: dict = None):
         matplotlib.use('TkAgg')
         train_data, test_data = DataLoader(dataset_name=dataset).load_data()
-        experiment_setup['output_folder'] = experiment_setup['output_folder'] + \
-            f'/{dataset}'
-        experiment_setup['history_dir'] = './composition_results' + \
-            f'/{dataset}'
+        experiment_setup['compute_config']['output_folder'] += f'/{dataset}'
+        experiment_setup['compute_config']['history_dir'] = f'./composition_results/{dataset}'
         model = FedotIndustrial(**experiment_setup)
         model.fit(train_data)
         prediction = model.predict(test_data)

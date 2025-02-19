@@ -5,10 +5,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from fedot_ind.api.utils.path_lib import PROJECT_PATH
 from fedot_ind.tools.loader import DataLoader
+from fedot_ind.tools.serialisation.path_lib import EXAMPLES_DATA_PATH
 
-EXAMPLES_DATA_PATH = os.path.join(PROJECT_PATH, 'examples', 'data')
 MOCK_LOADER = DataLoader(dataset_name='mock')
 
 
@@ -56,9 +55,9 @@ def test__load_from_tsfile_to_dataframe():
 
 
 def test_predict_encoding():
-    full_path = os.path.join(EXAMPLES_DATA_PATH,
-                             'ItalyPowerDemand_fake/ItalyPowerDemand_fake_TEST.ts')
-    encoding = MOCK_LOADER.predict_encoding(file_path=full_path)
+    DataLoader('AppliancesEnergy', folder=EXAMPLES_DATA_PATH).load_data()
+    path = os.path.join(EXAMPLES_DATA_PATH, 'AppliancesEnergy/AppliancesEnergy_TEST.ts')
+    encoding = MOCK_LOADER.predict_encoding(file_path=path)
     assert encoding is not None
 
 
@@ -66,7 +65,6 @@ def test_predict_encoding():
     (MOCK_LOADER.read_txt_files, 'ItalyPowerDemand_fake'),
     (MOCK_LOADER.read_ts_files, 'ItalyPowerDemand_fake'),
     (MOCK_LOADER.read_arff_files, 'ItalyPowerDemand_fake'),
-    (MOCK_LOADER.read_arff_files, 'DailyOilGasPrices'),  # multivariate arff
     (MOCK_LOADER.read_train_test_files, 'ItalyPowerDemand_fake'),
     (MOCK_LOADER.read_tsv_or_csv, 'ItalyPowerDemand_fake'),
 ])

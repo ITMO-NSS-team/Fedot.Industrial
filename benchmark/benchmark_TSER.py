@@ -1,20 +1,21 @@
-from fedot_ind.core.repository.constanst_repository import MULTI_REG_BENCH
-from fedot_ind.core.architecture.postprocessing.results_picker import ResultsPicker
-from benchmark.abstract_bench import AbstractBenchmark
-from fedot_ind.core.metrics.metrics_implementation import RMSE
-from fedot_ind.api.utils.path_lib import PROJECT_PATH
-from fedot_ind.api.main import FedotIndustrial
-from fedot.core.pipelines.pipeline import Pipeline
-from fedot.core.pipelines.node import PipelineNode
-import pandas as pd
 import logging
 import os
 from abc import ABC
 from copy import deepcopy
 
 import matplotlib
+import pandas as pd
+from fedot.core.pipelines.node import PipelineNode
+from fedot.core.pipelines.pipeline import Pipeline
 
+from benchmark.abstract_bench import AbstractBenchmark
+from fedot_ind.api.main import FedotIndustrial
+from fedot_ind.core.architecture.pipelines.abstract_pipeline import ApiTemplate
+from fedot_ind.core.architecture.postprocessing.results_picker import ResultsPicker
+from fedot_ind.core.metrics.metrics_implementation import RMSE
+from fedot_ind.core.repository.constanst_repository import MULTI_REG_BENCH
 from fedot_ind.tools.loader import DataLoader
+from fedot_ind.tools.serialisation.path_lib import PROJECT_PATH
 
 matplotlib.use('TkAgg')
 
@@ -31,6 +32,7 @@ class BenchmarkTSER(AbstractBenchmark, ABC):
         self.logger = logging.getLogger(self.__class__.__name__)
 
         self.experiment_setup = experiment_setup
+        self.init_assumption = deepcopy(self.experiment_setup['initial_assumption'])
         self.monash_regression = MULTI_REG_BENCH
         if custom_datasets is None:
             self.custom_datasets = self.monash_regression
@@ -40,26 +42,43 @@ class BenchmarkTSER(AbstractBenchmark, ABC):
         self.results_picker = ResultsPicker(
             path=os.path.abspath(self.output_dir))
 
+    def _run_model_versus_model(self, dataset_name, comparasion_dict):
+        approach_dict = {}
+        for approach in comparasion_dict.keys():
+            result_dict = ApiTemplate(api_config=self.experiment_setup,
+                                      metric_list=self.experiment_setup['metric_names']). \
+                eval(dataset=dataset_name,
+                     initial_assumption=comparasion_dict[approach],
+                     finetune=self.experiment_setup['finetune'])
+            metric = result_dict['metrics'][self.experiment_setup['metric']][0]
+            approach_dict.update({approach: metric})
+        return approach_dict
+
+    def _run_industrial_versus_sota(self, dataset_name):
+        experiment_setup = deepcopy(self.experiment_setup)
+        prediction, target = self.evaluate_loop(dataset_name, experiment_setup)
+        return RMSE(target, prediction).metric()
+
     def run(self):
         self.logger.info('Benchmark test started')
         basic_results = self.load_local_basic_results()
         metric_dict = {}
         for dataset_name in self.custom_datasets:
-            experiment_setup = deepcopy(self.experiment_setup)
-            prediction, target = self.evaluate_loop(
-                dataset_name, experiment_setup)
-            metric = RMSE(target, prediction).metric()
-            metric_dict.update({dataset_name: metric})
-            basic_results.loc[dataset_name, 'Fedot_Industrial'] = metric
-            dataset_path = os.path.join(
-                self.experiment_setup['output_folder'],
-                f'{dataset_name}',
-                'metrics_report.csv')
-            basic_results.to_csv(dataset_path)
-        basic_path = os.path.join(
-            self.experiment_setup['output_folder'],
-            'comprasion_metrics_report.csv')
-        basic_results.to_csv(basic_path)
+            try:
+                if isinstance(self.init_assumption, dict):
+                    model_name = list(self.init_assumption.keys())
+                    metric = self._run_model_versus_model(dataset_name, self.init_assumption)
+                else:
+                    metric = self._run_industrial_versus_sota(dataset_name)
+                    model_name = 'Fedot_Industrial'
+                metric_dict.update({dataset_name: metric})
+                basic_results.loc[dataset_name, model_name] = metric
+                basic_path = os.path.join(self.experiment_setup['output_folder'])
+                if not os.path.exists(basic_path):
+                    os.makedirs(basic_path)
+                basic_results.to_csv(os.path.join(basic_path, 'comprasion_metrics_report.csv'))
+            except Exception:
+                self.logger.info(f"{dataset_name} problem with eval")
         self.logger.info("Benchmark test finished")
 
     def load_local_basic_results(self, path: str = None):

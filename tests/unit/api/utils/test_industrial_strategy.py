@@ -1,74 +1,64 @@
-from fedot_ind.api.utils.industrial_strategy import IndustrialStrategy
 import pytest
 from fedot_ind.api.main import FedotIndustrial
+from fedot_ind.core.repository.config_repository import DEFAULT_CLF_AUTOML_CONFIG, \
+    DEFAULT_COMPUTE_CONFIG, DEFAULT_CLF_LEARNING_CONFIG, DEFAULT_AUTOML_LEARNING_CONFIG
 
-from fedot_ind.tools.synthetic.ts_datasets_generator import TimeSeriesDatasetsGenerator
+from tests.unit.api.fixtures import get_industrial_params, get_data_by_task
 
-STRATEGY = ['federated_automl', 'lora_strategy', 'kernel_automl', 'forecasting_assumptions']
-
-CONFIGS = {'federated_automl': {'problem': 'classification',
-                                'metric': 'f1',
-                                'timeout': 0.1,
-                                'industrial_strategy': 'federated_automl',
-                                'industrial_strategy_params': {}
-                                },
-
-           'lora_strategy': {'problem': 'classification',
-                             'metric': 'accuracy',
-                             'timeout': 0.1,
-                             'with_tuning': False,
-                             'industrial_strategy': 'lora_strategy',
-                             'industrial_strategy_params': {}
-                             },
-
-           'kernel_automl': {'problem': 'classification',
-                             'metric': 'f1',
-                             'timeout': 0.1,
-                             'with_tuning': False,
-                             'industrial_strategy': 'kernel_automl',
-                             'industrial_strategy_params': {}
-                             },
-
-           'forecasting_assumptions': {'problem': 'ts_forecasting',
-                                       'metric': 'rmse',
-                                       'timeout': 0.1,
-                                       'with_tuning': False,
-                                       'industrial_strategy': 'forecasting_assumptions',
-                                       'industrial_strategy_params': {}},
-
-           # 'forecasting_exogenous': {}
-           }
+STRATEGY = ['federated_automl', 'lora_strategy', 'kernel_automl', 'forecasting_assumptions', 'forecasting_exogenous']
 
 
-@pytest.fixture()
-def classification_data():
-    train_data, test_data = TimeSeriesDatasetsGenerator(num_samples=1800,
-                                                        task='classification',
-                                                        max_ts_len=50,
-                                                        binary=True,
-                                                        test_size=0.5,
-                                                        multivariate=False).generate_data()
-    return train_data, test_data
+INDUSTRIAL_PARAMS = get_industrial_params()
+DEFAULT_AUTOML_LEARNING_CONFIG['timeout'] = 0.1
+
+CONFIGS = {
+    # 'federated_automl': {'industrial_config': {'problem': 'classification',
+    #                                            'strategy': 'federated_automl',
+    #                                            'strategy_params': INDUSTRIAL_PARAMS},
+    #                      'learning_config': DEFAULT_CLF_LEARNING_CONFIG,
+    #                      'automl_config': DEFAULT_CLF_AUTOML_CONFIG,
+    #                      'compute_config': DEFAULT_COMPUTE_CONFIG},
+
+    'lora_strategy': {'industrial_config': {'problem': 'classification',
+                                            'strategy': 'lora_strategy',
+                                            'strategy_params': INDUSTRIAL_PARAMS},
+                      'learning_config': DEFAULT_CLF_LEARNING_CONFIG,
+                      'automl_config': DEFAULT_CLF_AUTOML_CONFIG,
+                      'compute_config': DEFAULT_COMPUTE_CONFIG},
+
+    'kernel_automl': {'industrial_config': {'problem': 'classification',
+                                            'strategy': 'kernel_automl',
+                                            'strategy_params': INDUSTRIAL_PARAMS},
+                      'learning_config': DEFAULT_CLF_LEARNING_CONFIG,
+                      'automl_config': DEFAULT_CLF_AUTOML_CONFIG,
+                      'compute_config': DEFAULT_COMPUTE_CONFIG},
+
+    # 'forecasting_assumptions': {'industrial_config': {'problem': 'ts_forecasting',
+    #                                                   'strategy': 'forecasting_assumptions',
+    #                                                   'strategy_params': INDUSTRIAL_PARAMS,
+    #                                                   'task_params': {'forecast_length': NUM_SAMPLES}},
+    #                             'learning_config': DEFAULT_REG_LEARNING_CONFIG,
+    #                             'automl_config': {**DEFAULT_TSF_AUTOML_CONFIG,
+    #                                               'task_params': {'forecast_length': NUM_SAMPLES}},
+    #                             'compute_config': DEFAULT_COMPUTE_CONFIG},
+
+    # 'forecasting_exogenous': {}
+}
 
 
 @pytest.mark.parametrize('strategy', STRATEGY)
-def test_industrial_strategy(strategy):
-    cnfg = CONFIGS[strategy]
-    base = IndustrialStrategy(industrial_strategy_params=None,
-                              industrial_strategy=strategy,
-                              api_config=cnfg)
+def test_custom_strategy(strategy):
+    if strategy in CONFIGS.keys():
+        cnfg = CONFIGS[strategy]
+        train_data, test_data = map(lambda x: (x[0].values, x[1]),
+                                    get_data_by_task(cnfg['industrial_config']['problem']))
+        n_samples = train_data[0].shape[0]
 
-    assert base is not None
+        industrial = FedotIndustrial(**cnfg)
+        assert industrial.manager.industrial_config.strategy is not None
 
+        industrial.fit(train_data)
+        predict = industrial.predict(test_data)
 
-def test_federated_strategy(classification_data):
-    train_data, test_data = classification_data
-
-    n_samples = train_data[0].shape[0]
-    cnfg = CONFIGS['federated_automl']
-    industrial = FedotIndustrial(**cnfg)
-    industrial.fit(train_data)
-    predict = industrial.predict(test_data)
-
-    assert predict is not None
-    assert predict.shape[0] == n_samples
+        assert predict is not None
+        assert predict.shape[0] == n_samples

@@ -1,43 +1,31 @@
 [tool.poetry]
 name = "fedot-ind"
-version = "0.4.3"
+version = "0.5.0"
 description = "Time series analysis framework"
 authors = ["NSS Lab <itmo.nss.team@gmail.com>"]
 license = "BSD 3-Clause"
 readme = "README_en.rst"
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.12"
-catboost = [
-    {version = "1.1.1", markers = "sys_platform == 'darwin'"},
-    {version = "*", markers = "sys_platform != 'darwin'"}
-]
-fedot = "^0.7.3"
-torch = "~2.2.0"
-torchvision = "~0.17.0"
-setuptools = "^70.0.0"
-chardet = "~5.2.0"
-tensorly = "0.8.1"
-pymonad = "2.4.0"
-pywavelets = "1.4.1"
-giotto-tda = ">=0.6.0"
-ripser = "0.6.4"
-fastcore = "~1.5.29"
-fastai = "~2.7.14"
-sktime = ">=0.16.1"
-distributed = "~2023.12.0"
-mklpy = "0.6"
-librosa = "~0.10.1"
-pyriemann = "~0.5"
-pyarrow = "15.0.1"
+python = ">=3.9, <3.12"
+fedot = { git = "https://github.com/aimclub/FEDOT.git", rev="feat-multi-tsf" }
+dask-ml = "^2024.4.4"
+spacy = ">=3.5,<3.6"
+fastai = "^2.7.18"
+giotto-tda = { version = "*", extras = [] }
+scikit-tda = "^1.1.1"
+chardet = "^5.2.0"
+tensorly = "^0.9.0"
+pymonad = "^2.4.0"
+pywavelets = "^1.5.0"
+mklpy = "^0.6"
+librosa = "^0.10.2.post1"
+pyriemann = "^0.7"
 datasetsforecast = "^0.0.8"
-datasets = "^2.19.2"
-matplotlib = "~3.8.2"
-numpy = "1.23.2"
-pytest-cov = "^5.0.0"
-sphinx-rtd-theme = "^2.0.0"
+datasets = "^2.0.0"
 spectrum = "^0.8.1"
-
+optuna-integration = "^4.1.0"
+pytest-cov = "^6.0.0"
 
 [tool.coverage.report]
 exclude_also = [
@@ -51,7 +39,6 @@ exclude_also = [
     "if self.verbose:",
     "if self.print_training_progress:"
 ]
-
 
 [build-system]
 requires = ["poetry-core"]

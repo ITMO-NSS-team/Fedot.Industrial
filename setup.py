@@ -8,7 +8,7 @@ HERE = Path(__file__).parent.resolve()
 
 # The text of the README file
 NAME = 'fedot_ind'
-VERSION = '0.4.2'
+VERSION = '0.5.0'
 AUTHOR = 'NSS Lab'
 AUTHOR_EMAIL = 'itmo.nss.team@gmail.com'
 SHORT_DESCRIPTION = 'Automated machine learning framework for time series analysis'
@@ -54,9 +54,9 @@ setuptools.setup(
     install_requires=_get_requirements('requirements.txt'),
     classifiers=[
         'License :: OSI Approved :: BSD License',
-        'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.11'
     ],
     keywords=KEYWORDS
 )

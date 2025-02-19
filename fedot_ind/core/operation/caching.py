@@ -1,12 +1,12 @@
 import hashlib
+import logging
 import os
 import timeit
 
-from fedot_ind.core.architecture.settings.computational import backend_methods as np
 import pandas as pd
-import logging
 
-from fedot_ind.api.utils.path_lib import PROJECT_PATH
+from fedot_ind.core.architecture.settings.computational import backend_methods as np
+from fedot_ind.tools.serialisation.path_lib import PROJECT_PATH
 
 
 class DataCacher:
@@ -41,7 +41,7 @@ class DataCacher:
         os.makedirs(cache_folder, exist_ok=True)
         return cache_folder
 
-    def hash_info(self, data, **kwargs) -> str:
+    def hash_info(self, operation_info: dict) -> str:
         """Method responsible for hashing distinct information about the data that is going to be cached.
         It utilizes md5 hashing algorithm.
         Args:
@@ -49,15 +49,8 @@ class DataCacher:
         Returns:
             Hashed string.
         """
-        # key = ''.join([repr(arg) for arg in kwargs.values()]).encode('utf8')
-        # key += data.__str__().encode('utf8')
-        # hsh = hashlib.md5(key).hexdigest()[:10]
 
-        key_info = ''.join([repr(arg)
-                            for arg in kwargs.values()]).encode('utf8')
-        key_data = data.__str__()
-
-        key = key_info + key_data.encode('utf8')
+        key = operation_info.encode('utf8')
         hsh = hashlib.md5(key).hexdigest()[:20]
 
         return hsh
@@ -78,7 +71,7 @@ class DataCacher:
             raise FileNotFoundError(f'File {file_path} was not found')
         elapsed_time = round(timeit.default_timer() - start, 5)
         print(
-            f'{self.data_type} of {type(data)} type is loaded from cache in {elapsed_time} sec')
+            f'{self.data_type} of {type(data)} type are loaded from cache in {elapsed_time} sec')
         return data
 
     def cache_data(self, hashed_info: str, data: pd.DataFrame):

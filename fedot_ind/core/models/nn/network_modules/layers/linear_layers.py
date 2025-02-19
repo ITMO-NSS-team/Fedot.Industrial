@@ -34,9 +34,12 @@ lin_zero_init = init_lin_zero
 class Flatten(Module):
 
     def forward(self, x):
-        bs, c, h, w = x.shape
-        flattened_tensor = x.reshape(bs, c, h * w)
-        return flattened_tensor
+        if len(x.shape) < 4:
+            return x
+        else:
+            bs, c, h, w = x.shape
+            flattened_tensor = x.reshape(bs, c, h * w)
+            return flattened_tensor
 
     def __repr__(self):
         return f"{self.__class__.__name__}"

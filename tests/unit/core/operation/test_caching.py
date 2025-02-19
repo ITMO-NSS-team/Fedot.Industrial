@@ -1,40 +1,50 @@
 import os
-import unittest
-
-from fedot_ind.core.architecture.settings.computational import backend_methods as np
+import pytest
 import pandas as pd
 
-from fedot_ind.api.utils.path_lib import PROJECT_PATH
+from fedot_ind.core.architecture.settings.computational import backend_methods as np
 from fedot_ind.core.operation.caching import DataCacher
+from fedot_ind.tools.serialisation.path_lib import PROJECT_PATH
 
 
-class TestDataCacher(unittest.TestCase):
+@pytest.fixture
+def cache_folder():
+    return os.path.join(PROJECT_PATH, 'cache')
 
-    def setUp(self):
-        self.cache_folder = os.path.join(PROJECT_PATH, 'cache')
-        self.data_cacher = DataCacher(
-            data_type_prefix='data', cache_folder=self.cache_folder)
-        self.data = pd.DataFrame({'a': [1, 2, 3], 'b': [4, 5, 6]})
 
-    def test_hash_info(self):
-        hashed_info = self.data_cacher.hash_info(
-            name='data', data=self.data, add_info=[
-                'fedot', 'industrial', 'time series'])
-        self.assertIsInstance(hashed_info, str)
-        self.assertEqual(len(hashed_info), 20)
+@pytest.fixture
+def data_cacher(cache_folder):
+    return DataCacher(data_type_prefix='data', cache_folder=cache_folder)
 
-    def test_cache_data(self):
-        hashed_info = self.data_cacher.hash_info(name='data', data=self.data)
-        self.data_cacher.cache_data(hashed_info, self.data)
-        cache_file = os.path.join(
-            self.data_cacher.cache_folder, hashed_info + '.npy')
 
-        self.assertTrue(os.path.isfile(cache_file))
+@pytest.fixture
+def test_data():
+    return pd.DataFrame({'a': [1, 2, 3], 'b': [4, 5, 6]})
 
-    def test_load_data_from_cache(self):
-        hashed_info = self.data_cacher.hash_info(name='data', data=self.data)
-        self.data_cacher.cache_data(hashed_info, self.data)
-        loaded_data = self.data_cacher.load_data_from_cache(hashed_info)
 
-        self.assertIsInstance(loaded_data, np.ndarray)
-        self.assertTrue((self.data.values == loaded_data).all())
+@pytest.fixture
+def cache_info(test_data):
+    return str({'name': test_data, 'add_info': ['fedot', 'industrial']})
+
+
+def test_hash_info(data_cacher, cache_info):
+    hashed_info = data_cacher.hash_info(operation_info=cache_info)
+    assert isinstance(hashed_info, str)
+    assert len(hashed_info) == 20
+
+
+def test_cache_data(data_cacher, test_data, cache_info):
+    hashed_info = data_cacher.hash_info(operation_info=cache_info)
+    data_cacher.cache_data(hashed_info, test_data)
+    cache_file = os.path.join(data_cacher.cache_folder, hashed_info + '.npy')
+
+    assert os.path.isfile(cache_file)
+
+
+def test_load_data_from_cache(data_cacher, test_data, cache_info):
+    hashed_info = data_cacher.hash_info(operation_info=cache_info)
+    data_cacher.cache_data(hashed_info, test_data)
+    loaded_data = data_cacher.load_data_from_cache(hashed_info)
+
+    assert isinstance(loaded_data, np.ndarray)
+    assert (test_data.values == loaded_data).all()

@@ -1,7 +1,7 @@
 import warnings
 from copy import deepcopy
 from inspect import signature
-from typing import Optional
+from typing import Optional, Union, Callable
 
 import numpy as np
 from fedot.core.data.data import InputData, OutputData
@@ -21,6 +21,17 @@ from fedot_ind.core.repository.model_repository import FEDOT_PREPROC_MODEL, FORE
 
 
 class MultiDimPreprocessingStrategy(EvaluationStrategy):
+    """
+    Class for preprocessing operations that can be used for multi-dimensional data.
+
+    Args:
+        operation_impl: operation implementation
+        operation_type: operation type
+        params: operation parameters
+        mode: mode of operation. Can be 'one_dimensional', 'channel_independent' or 'multi_dimensional'
+
+    """
+
     def __init__(self, operation_impl,
                  operation_type: str,
                  params: Optional[OperationParameters] = None,
@@ -77,7 +88,8 @@ class MultiDimPreprocessingStrategy(EvaluationStrategy):
         n_classes = 1 if any(one_class_operation) \
             else len(trained_operation.classes_[0]) \
             if self.operation_condition.is_multi_output_target \
-            else len(trained_operation.classes_)
+            else len(trained_operation.classes_) \
+            if hasattr(trained_operation.classes_, '__len__') else trained_operation.classes_
         predict_data = predict_data if self.operation_condition.is_predict_input_fedot else predict_data.features
         predict_method = curry(1)(lambda data: trained_operation.predict(data) if only_predict_method
                                   else trained_operation.predict_for_fit(data))
@@ -101,7 +113,6 @@ class MultiDimPreprocessingStrategy(EvaluationStrategy):
             predict_data, trained_operation[0], self.mode)
         predict_method = self.operation_condition_for_channel_independent.have_predict_method
         fedot_input = self.operation_condition_for_channel_independent.is_transform_input_fedot
-        lagged_operation = self.operation_type == 'lagged' or self.operation_type == 'sparse_lagged'
 
         # create list of InputData, where each InputData correspond to each
         # channel
@@ -135,8 +146,7 @@ class MultiDimPreprocessingStrategy(EvaluationStrategy):
             then(predict_branch(trained_operation)). \
             then(transform_branch(trained_operation)).value
 
-        prediction = prediction if lagged_operation else \
-            [pred.predict if not isinstance(pred, np.ndarray) else pred for pred in prediction]
+        prediction = [pred.predict if not isinstance(pred, np.ndarray) else pred for pred in prediction]
         prediction = NumpyConverter(data=self.concat_func(prediction)).convert_to_torch_format() \
             if not isinstance(prediction[0], OutputData) else prediction
         return prediction
@@ -217,29 +227,31 @@ class MultiDimPreprocessingStrategy(EvaluationStrategy):
         # If model is classical sklearn model we use classical sklearn predict method
         predict_one_dim = curry(2)(lambda operation, init_state: self._sklearn_compatible_prediction(
             operation, init_state, output_mode) if self.operation_condition.is_one_dim_operation else init_state)
+        is_transform_for_fit = output_mode.__contains__('transform_fit')
 
-        def multidim_predict(
-            operation,
-            previous_state): return previous_state if isinstance(
-            previous_state,
-            np.ndarray) else self.__operation_multidim_adapter(
-            operation,
-            previous_state,
-            output_mode)
+        def multidim_predict(operation, previous_state):
+            state_is_predict = isinstance(previous_state, np.ndarray) or isinstance(previous_state, OutputData)
+            if isinstance(previous_state, OutputData):
+                previous_state = previous_state.predict
+            return previous_state if state_is_predict else self.__operation_multidim_adapter(operation,
+                                                                                             previous_state,
+                                                                                             output_mode)
 
-        # Elif model could be use for each dimension(channel) independently we use multidimensional predict method
+        # Elif model could be used for each dimension(channel) independently we use multidimensional predict method
         predict_for_every_dim = curry(2)(multidim_predict)
-
-        prediction = Either.insert(predict_data). \
-            then(predict_one_dim(trained_operation)). \
-            then(predict_for_every_dim(trained_operation)).value
+        if is_transform_for_fit:
+            prediction = trained_operation[0].transform_for_fit(predict_data[0])
+        else:
+            prediction = Either.insert(predict_data). \
+                then(predict_one_dim(trained_operation)). \
+                then(predict_for_every_dim(trained_operation)).value
 
         return prediction
 
     def predict_for_fit(
             self,
-            trained_operation,
-            predict_data: InputData,
+            trained_operation: Union[Callable, list],
+            predict_data: Union[InputData, list],
             output_mode: str = 'default') -> OutputData:
         data_type, predict_data_copy = FedotConverter(predict_data).unwrap_list_to_output()
         # Create data condition verifier
@@ -390,6 +402,7 @@ class IndustrialForecastingPreprocessingStrategy(
             predict_data)
         predict_output = self.multi_dim_dispatcher.predict(
             trained_operation, converted_predict_data, output_mode=output_mode)
+        predict_output.predict = predict_output.predict.squeeze()
         return predict_output
 
     def predict_for_fit(self, trained_operation,
@@ -398,7 +411,8 @@ class IndustrialForecastingPreprocessingStrategy(
         converted_predict_data = self.multi_dim_dispatcher._convert_input_data(
             predict_data)
         predict_output = self.multi_dim_dispatcher.predict_for_fit(
-            trained_operation, converted_predict_data, output_mode=output_mode)
+            trained_operation, converted_predict_data, output_mode='transform_fit_stage')
+        predict_output.predict = predict_output.predict.squeeze()
         return predict_output
 
 

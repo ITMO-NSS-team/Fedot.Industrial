@@ -1,14 +1,14 @@
 {
   "eigen_basis": {
     "window_size": 20,
-    "rank_regularization": "hard_thresholding",
-    "low_rank_approximation": true,
-    "tensor_approximation": false
+    "rank_regularization": "explained_dispersion",
+    "decomposition_type": "svd"
   },
   "recurrence_extractor": {
-    "window_size": 0,
+    "window_size": 10,
     "stride": 1,
     "rec_metric": "cosine",
+    "use_sliding_window": false,
     "image_mode": false
   },
   "minirocket_extractor": {
@@ -28,6 +28,18 @@
   "deepar_model": {
     "epochs": 100,
     "batch_size": 16
+  },
+  "eigen_forecaster": {
+    "channel_model": "ar"
+  },
+  "topo_forecaster": {
+    "channel_model": "ridge",
+    "patch_len": 10,
+    "window_size": 10
+  },
+  "lagged_forecaster": {
+    "channel_model": "ridge",
+    "window_size": 10
   },
   "inception_model": {
     "epochs": 100,
@@ -67,17 +79,44 @@
     "max_features": 0.9,
     "alpha": 0.85
   },
+  "industrial_stat_clf": {
+    "channel_model": "logit",
+    "transformation_model": "quantile_extractor"
+  },
+  "industrial_manifold_clf": {
+    "channel_model": "rf",
+    "transformation_model": "recurrence_extractor"
+  },
+  "industrial_freq_clf": {
+    "channel_model": "rf",
+    "transformation_model": "fourier_basis"
+  },
+  "industrial_stat_reg": {
+    "channel_model": "treg",
+    "transformation_model": "quantile_extractor"
+  },
+  "industrial_manifold_reg": {
+    "channel_model": "treg",
+    "transformation_model": "recurrence_extractor"
+  },
+  "industrial_freq_reg": {
+    "channel_model": "treg",
+    "transformation_model": "fourier_basis"
+  },
   "logit": {
     "C": 1,
     "penalty": "l2",
-    "solver": "liblinear"
+    "solver": "lbfgs"
   },
   "rf": {
-    "criterion":"gini",
+    "criterion": "gini",
     "max_features": 0.9,
     "min_samples_split": 5,
     "min_samples_leaf": 5,
     "bootstrap": false
+  },
+  "pdl_clf": {
+    "model": "rf"
   },
   "ridge": {
     "alpha": 1.0
@@ -124,6 +163,9 @@
     "min_samples_leaf": 10,
     "bootstrap": false
   },
+  "pdl_reg": {
+    "model": "treg"
+  },
   "dt": {
     "max_depth": 5,
     "min_samples_split": 10,
@@ -167,6 +209,9 @@
     "seasonal": null,
     "damped_trend": false,
     "seasonal_periods": 7
+  },
+  "bagging": {
+    "method": "weighted"
   },
   "polyfit": {
     "degree": 2
@@ -329,9 +374,11 @@
     "threshold": 0.9
   },
   "quantile_extractor": {
-    "window_size": 0,
-    "window_mode": false,
-    "var_threshold": 0.01
+    "window_size": 10,
+    "use_sliding_window": true,
+    "stride": 1,
+    "add_global_features": true,
+    "use_cache": true
   },
   "riemann_extractor": {
     "n_filter": 4,
@@ -417,9 +464,9 @@
   },
   "iforest_detector": {
     "window_length": 10,
-    "anomaly_thr": null,
+    "anomaly_thr": 0.1,
     "n_jobs": 2,
-    "contamination": 0.0005,
+    "contamination": "auto",
     "random_state": 42
   },
   "conv_ae_detector": {

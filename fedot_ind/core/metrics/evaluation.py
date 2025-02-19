@@ -1,9 +1,21 @@
 import logging
 from enum import Enum
-from typing import Dict, List
+from typing import Dict, List, Union
 
+import numpy as np
 
-from fedot_ind.core.metrics.metrics_implementation import *
+from fedot_ind.core.metrics.metrics_implementation import (
+    F1,
+    MAE,
+    MAPE,
+    MSE,
+    R2,
+    RMSE,
+    ROCAUC,
+    Accuracy,
+    Logloss,
+    Precision,
+)
 
 
 class Metrics(Enum):

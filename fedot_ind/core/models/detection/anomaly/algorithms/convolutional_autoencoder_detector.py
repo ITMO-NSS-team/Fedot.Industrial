@@ -4,11 +4,13 @@ from typing import Optional
 from fedot.core.operations.operation_parameters import OperationParameters
 from torch import Tensor, cuda, device, no_grad
 from torch.nn import Conv1d, ConvTranspose1d, Module, MSELoss, Sequential, ReLU
-from torch.optim import Adam
+from torch.optim import Adam, lr_scheduler
 from torch.utils.data import DataLoader, TensorDataset, SubsetRandomSampler
+from tqdm import tqdm
 
 from fedot_ind.core.architecture.settings.computational import backend_methods as np
 from fedot_ind.core.models.detection.anomaly.algorithms.autoencoder_detector import AutoEncoderDetector
+from fedot_ind.core.models.nn.network_modules.layers.special import EarlyStopping
 
 device = device("cuda:0" if cuda.is_available() else "cpu")
 
@@ -32,11 +34,16 @@ class ConvolutionalAutoEncoder(Module):
         self.decoder_layers = params.get('num_decoder_layers', 2)
         self.latent_layer_params = params.get('latent_layer', 16)
         self.convolutional_params = params.get('convolutional_params',
-                                               dict(kernel_size=7, stride=2, padding=3))
+                                               dict(kernel_size=3, stride=0, padding=0))
         self.activation_func = params.get('act_func', ReLU)
         self.dropout_rate = params.get('dropout_rate', 0.5)
+
+    def _init_model(self) -> tuple:
         self._build_encoder()
         self._build_decoder()
+        self.loss_fn = MSELoss()
+        self.optimizer = Adam(self.parameters(), lr=self.learning_rate)
+        return self.loss_fn, self.optimizer
 
     def _build_encoder(self):
         encoder_layer_dict = OrderedDict()
@@ -74,20 +81,8 @@ class ConvolutionalAutoEncoder(Module):
             in_channels = out_channels
         self.decoder = Sequential(decoder_layer_dict)
 
-    def forward(self, x):
-        x = self.encoder(x)
-        x = self.decoder(x)
-        return x
-
-    def fit(self,
-            data,
-            epochs: int = 100,
-            batch_size: int = 32,
-            validation_split: float = 0.1):
-        dataset = TensorDataset(Tensor(data))
-        optimizer = Adam(self.parameters(), lr=self.learning_rate)
-        criterion = MSELoss()
-
+    def _create_dataloader(self, input_data, batch_size, validation_split):
+        dataset = TensorDataset(Tensor(input_data))
         num_train = len(dataset)
         indices = list(range(num_train))
         split = int(np.floor(validation_split * num_train))
@@ -100,24 +95,59 @@ class ConvolutionalAutoEncoder(Module):
 
         train_loader = DataLoader(dataset, batch_size=batch_size, sampler=train_sampler)
         valid_loader = DataLoader(dataset, batch_size=batch_size, sampler=valid_sampler)
+        return train_loader, valid_loader
 
-        for epoch in range(epochs):
+    def forward(self, x):
+        x = self.encoder(x)
+        x = self.decoder(x)
+        return x
+
+    def fit(self,
+            data,
+            epochs: int = 100,
+            batch_size: int = 32,
+            validation_split: float = 0.1):
+        self._init_model()
+        train_loader, valid_loader = self._create_dataloader(data, batch_size, validation_split)
+        train_steps, early_stopping, best_model, best_val_loss = max(1, len(train_loader)), EarlyStopping(), \
+            None, float('inf')
+        scheduler = lr_scheduler.OneCycleLR(optimizer=self.optimizer,
+                                            steps_per_epoch=train_steps,
+                                            epochs=epochs,
+                                            max_lr=self.learning_rate)
+
+        def train_one_batch(batch):
+            batch_x = batch[0]
+            self.optimizer.zero_grad()
+            outputs = self.forward(batch_x)
+            loss = self.loss_fn(outputs, batch_x)
+            loss.backward()
+            self.optimizer.step()
+            return loss.item()
+
+        def val_one_epoch(batch):
+            inputs = batch[0]
+            output = self.forward(inputs)
+            loss = self.loss_fn(output, inputs)
+            return loss.data.item() * inputs.size(0)
+
+        for epoch in tqdm(range(epochs)):
             self.train()
-            train_loss = 0.0
-            for batch in train_loader:
-                optimizer.zero_grad()
-                outputs = self.forward(batch[0])
-                loss = criterion(outputs, batch[0])
-                loss.backward()
-                optimizer.step()
-                train_loss += loss.item()
-            self.eval()
-            valid_loss = 0.0
-            with no_grad():
-                for batch in valid_loader:
-                    outputs = self.forward(batch[0])
-                    loss = criterion(outputs, batch[0])
-                    valid_loss += loss.item()
+            train_loss = list(map(lambda batch_tuple: train_one_batch(batch_tuple), train_loader))
+            train_loss = np.average(train_loss)
+            if valid_loader is not None:
+                self.eval()
+                valid_loss = list(map(lambda batch_tuple: val_one_epoch(batch_tuple), valid_loader))
+                valid_loss = np.average(valid_loss)
+            last_lr = scheduler.get_last_lr()[0]
+            if epoch % 25 == 0:
+                print(
+                    "Epoch: {0}, Train Loss: {1} | Validation Loss: {2:.7f}".format(epoch + 1, train_loss, valid_loss))
+                print('Updating learning rate to {}'.format(last_lr))
+            if early_stopping.early_stop:
+                print("Early stopping")
+                break
+        return self
 
     def predict(self, data):
         self.eval()

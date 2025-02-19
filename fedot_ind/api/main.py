@@ -1,26 +1,32 @@
 import os
 import warnings
 from copy import deepcopy
-from typing import Union
+from functools import partial
+from typing import Union, Callable, Optional
 
 import numpy as np
 import pandas as pd
 from fedot.api.main import Fedot
+from fedot.core.data.data import OutputData, InputData
 from fedot.core.pipelines.pipeline import Pipeline
 from fedot.core.visualisation.pipeline_specific_visuals import PipelineHistoryVisualizer
 from golem.core.optimisers.opt_history_objects.opt_history import OptHistory
 from pymonad.either import Either
+from pymonad.tools import curry
 from sklearn import model_selection as skms
 from sklearn.calibration import CalibratedClassifierCV
 
 from fedot_ind.api.utils.api_init import ApiManager
 from fedot_ind.api.utils.checkers_collections import DataCheck
-from fedot_ind.core.architecture.abstraction.decorators import DaskServer
-from fedot_ind.core.architecture.pipelines.classification import SklearnCompatibleClassifier
-from fedot_ind.core.architecture.preprocessing.data_convertor import ApiConverter
-from fedot_ind.core.repository.constanst_repository import \
-    FEDOT_GET_METRICS, FEDOT_TUNING_METRICS, \
-    FEDOT_TUNER_STRATEGY
+from fedot_ind.core.architecture.abstraction.decorators import DaskServer, exception_handler
+from fedot_ind.core.architecture.pipelines.classification import (
+    SklearnCompatibleClassifier,
+)
+from fedot_ind.core.repository.constanst_repository import (
+    FEDOT_GET_METRICS,
+    FEDOT_TUNER_STRATEGY,
+    FEDOT_TUNING_METRICS
+)
 from fedot_ind.core.repository.industrial_implementations.abstract import build_tuner
 from fedot_ind.core.repository.initializer_industrial_models import IndustrialModels
 
@@ -28,11 +34,32 @@ warnings.filterwarnings("ignore")
 
 
 class FedotIndustrial(Fedot):
-    """This class is used to run Fedot in industrial mode as FedotIndustrial.
+    """Main class for Industrial API. It provides a high-level interface for working with the
+    Fedot framework. The class allows you to train, predict, and evaluate models for time series.
+    All arguments are passed as keyword arguments and handled by the ApiManager class.
 
     Args:
-        input_config: dictionary with the parameters of the experiment.
-        output_folder: path to the folder where the results will be saved.
+        problem: str. The type of task to solve. Available options: 'ts_forecasting', 'ts_classification', 'ts_regression'.
+        timeout: int. Time for model design (in minutes): ``None`` or ``-1`` means infinite time.
+                logging_level: logging levels are the same as in
+            `built-in logging library <https://docs.python.org/3/library/logging.html>`_.
+
+            .. details:: Possible options:
+
+                - ``50`` -> critical
+                - ``40`` -> error
+                - ``30`` -> warning
+                - ``20`` -> info
+                - ``10`` -> debug
+                - ``0`` -> nonset
+        backend_method: str. Default `cpu`. The method for backend. Available options: 'cpu', 'dask'.
+        initial_assumption: Pipeline = None. The initial pipeline for the model.
+        optimizer_params: dict = None.
+        task_params: dict = None.
+        strategy: str = None.
+        strategy_params: dict = None.
+        available_operations: list = None.
+        output_folder: str = './output'.
 
     Example:
         First, configure experiment and instantiate FedotIndustrial class::
@@ -42,7 +69,6 @@ class FedotIndustrial(Fedot):
 
 
             industrial = FedotIndustrial(problem='ts_classification',
-                                         use_cache=False,
                                          timeout=15,
                                          n_jobs=2,
                                          logging_level=20)
@@ -62,47 +88,66 @@ class FedotIndustrial(Fedot):
 
     def __init__(self, **kwargs):
         super(Fedot, self).__init__()
-        self.api_controller = ApiManager(**kwargs)
-        self.config_dict = self.api_controller.config_dict
-        self.logger = self.api_controller.logger
-        self.industrial_strategy_class = self.api_controller.industrial_strategy_class
+        self.manager = ApiManager().build(kwargs)
+        self.logger = self.manager.logger
 
-    def __init_solver(self):
-        self.logger.info(f'-------------------------------------------------')
+    def __init_industrial_backend(self, input_data: Optional[Union[InputData, np.array]] = None):
+        self.logger.info('-' * 50)
         self.logger.info('Initialising Industrial Repository')
-        if self.api_controller.is_default_fedot_context:
+        if self.manager.industrial_config.is_default_fedot_context:
+            self.logger.info(f'-------------------------------------------------')
+            self.logger.info('Initialising Fedot Evolutionary Optimisation params')
             self.repo = IndustrialModels().setup_default_repository()
-            self.config_dict['optimizer'] = None
+            self.manager.automl_config.optimisation_strategy = self.manager.optimisation_agent['Fedot']
         else:
-            self.repo = IndustrialModels().setup_repository()
-        self.logger.info(f'-------------------------------------------------')
+            self.logger.info(f'-------------------------------------------------')
+            self.logger.info('Initialising Industrial Evolutionary Optimisation params')
+            self.repo = IndustrialModels().setup_repository(backend=self.manager.compute_config.backend)
+            optimisation_agent = self.manager.automl_config.optimisation_strategy['optimisation_agent']
+            optimisation_params = self.manager.automl_config.optimisation_strategy['optimisation_strategy']
+            self.manager.automl_config.optimisation_strategy = partial(
+                self.manager.optimisation_agent[optimisation_agent],
+                optimisation_params=optimisation_params)
+        return input_data
+
+    def __init_solver(self, input_data: Optional[Union[InputData, np.array]] = None):
+        self.logger.info('-' * 50)
         self.logger.info('Initialising Dask Server')
-        self.config_dict['initial_assumption'] = self.config_dict['initial_assumption'].build()
-        self.dask_client = DaskServer().client
-        self.logger.info(f'LinK Dask Server - {self.dask_client.dashboard_link}')
-        self.logger.info(f'-------------------------------------------------')
+        if self.manager.automl_config.config['initial_assumption'] is None:
+            self.manager.automl_config.config['initial_assumption'] = \
+                self.manager.industrial_config.config['initial_assumption'].build()
+        else:
+            self.manager.automl_config.config['initial_assumption'] = \
+                self.manager.automl_config.config['initial_assumption'].build()
+        dask_server = DaskServer(self.manager.compute_config.distributed)
+        self.manager.dask_client = dask_server.client
+        self.manager.dask_cluster = dask_server.cluster
+        self.logger.info(f'Link Dask Server - {self.manager.dask_client.dashboard_link}')
+        self.logger.info('-' * 50)
         self.logger.info('Initialising solver')
-        self.solver = Fedot(**self.config_dict)
-        # if self.api_controller.is_default_fedot_context:
-        #     self.solver = self.api_controller._check_mutations(self.solver)
+        self.manager.solver = Fedot(
+            **self.manager.learning_config.config['learning_strategy_params'],
+            metric=self.manager.learning_config.config['optimisation_loss'],
+            problem=self.manager.automl_config.config['task'],
+            task_params=self.manager.industrial_config.task_params
+            if self.manager.industrial_config.is_forecasting_context else self.manager.automl_config.config
+            ['task_params'], optimizer=self.manager.automl_config.optimisation_strategy,
+            available_operations=self.manager.automl_config.config['available_operations'],
+            initial_assumption=self.manager.automl_config.config['initial_assumption'])
+        return input_data
 
     def _process_input_data(self, input_data):
-        train_data = deepcopy(input_data)  # we do not want to make inplace changes
-        input_preproc = DataCheck(
-            input_data=train_data,
-            task=self.config_dict['problem'],
-            task_params=self.api_controller.task_params,
-            fit_stage=True,
-            industrial_task_params=self.api_controller.industrial_strategy_params)
-        train_data = input_preproc.check_input_data()
-        self.target_encoder = input_preproc.get_target_encoder()
-
-        train_data.features = train_data.features.squeeze() if self.api_controller.is_default_fedot_context \
+        train_data, self.target_encoder = Either.insert(input_data).then(lambda data: deepcopy(data)). \
+            then(lambda data: DataCheck(input_data=data, task=self.manager.automl_config.config['task'],
+                                        task_params=self.manager.automl_config.config['task_params'], fit_stage=True,
+                                        industrial_task_params=self.manager.industrial_config.strategy_params)). \
+            then(lambda data_cls: (data_cls.check_input_data(), data_cls.get_target_encoder())).value
+        train_data.features = train_data.features.squeeze() if self.manager.industrial_config.is_default_fedot_context \
             else train_data.features
         return train_data
 
-    def __calibrate_probs(self, industrial_model):
-        model_sklearn = SklearnCompatibleClassifier(industrial_model)
+    def __calibrate_probs(self, probability_model, predict_data):
+        model_sklearn = SklearnCompatibleClassifier(probability_model)
         train_idx, test_idx = skms.train_test_split(self.train_data.idx,
                                                     train_size=0.8,
                                                     test_size=0.2,
@@ -116,39 +161,45 @@ class FedotIndustrial(Fedot):
         cal_clf = CalibratedClassifierCV(model_sklearn, method="sigmoid", cv="prefit")
         cal_clf.fit(val_data[0], val_data[1])
         # calibrated prediction
-        calibrated_proba = cal_clf.predict_proba(self.predict_data.features)
+        calibrated_proba = cal_clf.predict_proba(predict_data.features)
         return calibrated_proba
 
     def __predict_for_ensemble(self):
-        predict = self.industrial_strategy_class.predict(
-            self.predict_data, 'probs')
-        ensemble_strat = self.industrial_strategy_class.ensemble_strategy
-        predict = {strategy: np.argmax(self.industrial_strategy_class.ensemble_predictions(predict, strategy), axis=1)
-                   for strategy in ensemble_strat}
+        predict = self.manager.industrial_config.strategy.predict(self.predict_data, 'probs')
+        ensemble_strat = self.manager.industrial_config.strategy.ensemble_strategy
+        predict = {strategy: np.argmax(self.manager.industrial_config.strategy.ensemble_predictions(
+            predict, strategy), axis=1) for strategy in ensemble_strat}
         return predict
 
-    def __abstract_predict(self, predict_mode):
-        have_encoder = self.api_controller.condition_check.solver_have_target_encoder(self.target_encoder)
-        labels_output = predict_mode in ['labels']
-        default_fedot_strategy = self.api_controller.industrial_strategy is None
-        custom_predict = self.solver.predict if default_fedot_strategy else self.industrial_strategy_class.predict
-
-        predict_function = Either(value=custom_predict,
-                                  monoid=['prob', labels_output]).either(
-            left_function=lambda prob_func: self.solver.predict_proba,
-            right_function=lambda label_func: label_func)
+    def __abstract_predict(self, predict_data, predict_mode):
+        have_encoder = self.manager.condition_check.solver_have_target_encoder(self.target_encoder)
+        custom_predict = all([not self.manager.condition_check.solver_is_fedot_class(self.manager.solver),
+                              not self.manager.condition_check.solver_is_pipeline_class(self.manager.solver)])
 
         def _inverse_encoder_transform(predict):
-            predicted_labels = self.target_encoder.inverse_transform(
-                predict)
-            self.predict_data.target = self.target_encoder.inverse_transform(
-                self.predict_data.target)
+            predicted_labels = self.target_encoder.inverse_transform(predict)
+            self.predict_data.target = self.target_encoder.inverse_transform(self.predict_data.target)
             return predicted_labels
 
-        predict = Either(
-            value=self.predict_data, monoid=[False, True]).then(
-            function=lambda x: predict_function(x, predict_mode)).then(
-            lambda x: _inverse_encoder_transform(x) if have_encoder else x).value
+        def predict_func(predict_from_solver):
+            is_labels_output = predict_mode in ['labels']
+            if self.manager.condition_check.solver_is_pipeline_class(self.manager.solver):
+                predict = self.manager.solver.predict(predict_from_solver, predict_mode)
+            else:
+                if is_labels_output:
+                    predict = self.manager.solver.predict(predict_from_solver)
+                else:
+                    predict = self.manager.solver.predict_proba(predict_from_solver)
+            return predict
+
+        predict = Either(value=predict_data,
+                         monoid=[predict_data, custom_predict]).either(
+            left_function=lambda predict_from_solver: predict_func(predict_from_solver),
+            right_function=lambda predict_from_custom: self.manager.solver.predict(predict_from_custom))
+        predict = Either.insert(predict).then(lambda x: _inverse_encoder_transform(x) if have_encoder else x). \
+            then(lambda x: x.predict if isinstance(predict, OutputData) else x).value
+        if predict_data.task.task_type.value.__contains__('forecasting'):
+            predict = predict[-predict_data.task.task_params.forecast_length:]
         return predict
 
     def _metric_evaluation_loop(self,
@@ -168,7 +219,7 @@ class FedotIndustrial(Fedot):
                            in predicted_labels.items()}
             return metric_dict
         else:
-            if self.api_controller.condition_check.solver_have_target_encoder(self.target_encoder):
+            if self.manager.condition_check.solver_have_target_encoder(self.target_encoder):
                 new_target = self.target_encoder.transform(target.flatten())
                 labels = self.target_encoder.transform(predicted_labels).reshape(valid_shape)
             else:
@@ -192,15 +243,19 @@ class FedotIndustrial(Fedot):
             **kwargs: additional parameters
 
         """
-        custom_fit = all([self.api_controller.industrial_strategy is not None,
-                          self.api_controller.industrial_strategy != 'anomaly_detection'])
-        self.is_finetuned = False
-        self.train_data = self._process_input_data(input_data)
-        self.__init_solver()
-        Either(value=self.train_data,
-               monoid=[self.train_data,
-                       custom_fit]).either(left_function=self.solver.fit,
-                                           right_function=self.industrial_strategy_class.fit)
+
+        def fit_function(train_data): return \
+            Either(value=train_data, monoid=[train_data,
+
+                                             not isinstance(self.manager.industrial_config.strategy, Callable)]). \
+            either(left_function=lambda data: self.manager.industrial_config.strategy.fit(data),
+                   right_function=lambda data: self.manager.solver.fit(data))
+
+        with exception_handler(Exception, on_exception=self.shutdown, suppress=False):
+            Either.insert(self._process_input_data(input_data)). \
+                then(lambda data: self.__init_industrial_backend(data)). \
+                then(lambda data: self.__init_solver(data)). \
+                then(fit_function)
 
     def predict(self,
                 predict_data: tuple,
@@ -217,9 +272,13 @@ class FedotIndustrial(Fedot):
             the array with prediction values
 
         """
-        self.predict_data = self._process_input_data(predict_data)
-        self.predicted_labels = self.__abstract_predict(predict_mode)
-        return self.predicted_labels
+        predict_func = curry(2)(lambda predict_mode, predict_data: self.__abstract_predict(predict_data, predict_mode))
+        self.repo = IndustrialModels().setup_repository(backend=self.manager.compute_config.backend)
+        processed_input = self._process_input_data(predict_data)
+        self.manager.predict_data = processed_input
+        self.manager.predicted_labels = Either.insert(processed_input).then(predict_func(predict_mode)).value
+
+        return self.manager.predicted_labels
 
     def predict_proba(self,
                       predict_data: tuple,
@@ -238,16 +297,24 @@ class FedotIndustrial(Fedot):
             the array with prediction probabilities
 
         """
-        self.predict_data = self._process_input_data(predict_data)
-        self.predicted_probs = self.predicted_labels if self.api_controller.is_regression_task_context \
-            else self.__abstract_predict(predict_mode)
-        return self.__calibrate_probs(self.solver.current_pipeline) if calibrate_probs else self.predicted_probs
+        self.repo = IndustrialModels().setup_repository(backend=self.manager.compute_config.backend)
+        predict_mode = predict_mode if not self.manager.industrial_config.is_regression_task_context else 'labels'
+        predict_func = curry(2)(lambda predict_mode, predict_data: self.__abstract_predict(predict_data, predict_mode))
+        calibrate_func = curry(3)(lambda prob_model, data_for_calib, labels:
+                                  self.__calibrate_probs(prob_model, data_for_calib) if predict_mode.__contains__(
+                                      'probs') else labels)
+        self.manager.predicted_probs = Either. \
+            insert(self._process_input_data(predict_data)). \
+            then(predict_func(predict_mode)).value
+        # then(calibrate_func(self.manager.solver, predict_data)).value
+
+        return self.manager.predicted_probs
 
     def finetune(self,
-                 train_data,
-                 tuning_params=None,
-                 model_to_tune=None,
-                 mode: str = 'head'):
+                 train_data: Union[InputData, dict, tuple],
+                 tuning_params: Optional[dict] = None,
+                 model_to_tune: Optional[Pipeline] = None,
+                 return_only_fitted: bool = False):
         """Method to obtain prediction probabilities from trained Industrial model.
 
             Args:
@@ -257,35 +324,34 @@ class FedotIndustrial(Fedot):
                 mode: str, ``default='head'``. Defines the mode of fine-tuning. Could be 'full' or 'head'.
 
             """
-        tuned_metric = 0
-        self.is_finetuned = True
 
-        train_data = self._process_input_data(train_data) if \
-            not self.api_controller.condition_check.input_data_is_fedot_type(train_data) else train_data
-        if tuning_params is None:
-            tuning_params = ApiConverter.tuning_params_is_none(tuning_params)
-        tuning_params['metric'] = FEDOT_TUNING_METRICS[self.config_dict['problem']]
+        def _fit_pipeline(data_dict):
+            data_dict['model_to_tune'].fit(data_dict['train_data'])
+            return data_dict
 
-        for tuner_name, tuner_type in FEDOT_TUNER_STRATEGY.items():
-            if self.api_controller.condition_check.solver_is_fedot_class(self.solver):
-                model_to_tune = deepcopy(self.solver.current_pipeline)
-            elif not self.api_controller.condition_check.solver_is_none(model_to_tune):
-                model_to_tune = model_to_tune
-            else:
-                model_to_tune = deepcopy(
-                    self.config_dict['initial_assumption']).build()
-            tuning_params['tuner'] = tuner_type
-            pipeline_tuner, model_to_tune = build_tuner(
-                self, model_to_tune, tuning_params, train_data, mode)
-            if abs(pipeline_tuner.obtained_metric) > tuned_metric:
-                tuned_metric = abs(pipeline_tuner.obtained_metric)
-                self.solver = model_to_tune
+        is_fedot_datatype = self.manager.condition_check.input_data_is_fedot_type(train_data)
+        tuning_params['metric'] = FEDOT_TUNING_METRICS[self.manager.automl_config.config['task']]
+        tuning_params['tuner'] = FEDOT_TUNER_STRATEGY[tuning_params.get('tuner', 'sequential')]
+
+        with exception_handler(Exception, on_exception=self.shutdown, suppress=False):
+            model_to_tune = Either.insert(train_data). \
+                then(lambda data: self._process_input_data(data) if not is_fedot_datatype else data). \
+                then(lambda data: self.__init_industrial_backend(data)). \
+                then(lambda processed_data: {'train_data': processed_data} |
+                                            {'model_to_tune': model_to_tune.build()} |
+                                            {'tuning_params': tuning_params}). \
+                then(lambda dict_for_tune: _fit_pipeline(dict_for_tune)['model_to_tune'] if return_only_fitted
+                     else build_tuner(self, **dict_for_tune)).value
+
+        self.manager.is_finetuned = True
+        self.manager.solver = model_to_tune
 
     def get_metrics(self,
+                    labels: np.ndarray,
+                    probs: np.ndarray,
                     target: Union[list, np.array] = None,
-                    metric_names: tuple = ('f1', 'roc_auc', 'accuracy'),
-                    rounding_order: int = 3,
-                    **kwargs) -> pd.DataFrame:
+                    metric_names: tuple = None,
+                    rounding_order: int = 3) -> pd.DataFrame:
         """
         Method to calculate metrics for Industrial model.
 
@@ -303,56 +369,65 @@ class FedotIndustrial(Fedot):
             pandas DataFrame with calculated metrics
 
         """
-        problem = self.config_dict['problem']
-        if problem == 'classification' and self.predicted_probs is None and 'roc_auc' in metric_names:
+        problem = self.manager.automl_config.task
+        warning_about_probs = all([problem == 'classification',
+                                   probs is None,
+                                   'roc_auc' in metric_names])
+        if warning_about_probs:
             self.logger.info('Predicted probabilities are not available. Use `predict_proba()` method first')
-        if isinstance(self.predicted_probs, dict):
-            metric_dict = {
-                strategy: self._metric_evaluation_loop(
-                    target=target,
-                    problem=problem,
-                    predicted_labels=self.predicted_labels[strategy],
-                    predicted_probs=probs,
-                    rounding_order=rounding_order,
-                    metric_names=metric_names) for strategy,
-                probs in self.predicted_probs.items()}
 
-        else:
-            metric_dict = self._metric_evaluation_loop(
-                target=target,
-                problem=problem,
-                predicted_labels=self.predicted_labels,
-                predicted_probs=self.predicted_probs,
-                rounding_order=rounding_order,
-                metric_names=metric_names)
-        return metric_dict
+        self.metric_dict = self._metric_evaluation_loop(
+            target=target,
+            problem=problem,
+            predicted_labels=labels,
+            predicted_probs=probs,
+            rounding_order=rounding_order,
+            metric_names=metric_names)
+        return self.metric_dict
 
-    def save_predict(self, predicted_data, **kwargs) -> None:
-        """
-        Method to save prediction locally in csv format
+    def save(self, mode: str = 'all', **kwargs):
+        is_fedot_solver = self.manager.condition_check.solver_is_fedot_class(self.manager.solver)
 
-        Args:
-            predicted_data: predicted data. For TSC task it could be either labels or probabilities
+        def save_model(api_manager):
+            return Either(value=api_manager.solver,
+                          monoid=[api_manager.solver,
+                                  api_manager.condition_check.solver_is_fedot_class(
+                                      api_manager.solver)]). \
+                either(left_function=lambda pipeline: pipeline.save(path=api_manager.compute_config.output_folder,
+                                                                    create_subdir=True, is_datetime_in_path=True),
+                       right_function=lambda solver: solver.current_pipeline.save(
+                           path=api_manager.compute_config.output_folder,
+                           create_subdir=True,
+                           is_datetime_in_path=True))
 
-        Returns:
-            None
+        def save_opt_hist(api_manager):
+            return self.manager.solver.history.save(
+                f"{self.manager.compute_config.output_folder}/optimization_history.json")
 
-        """
-        kind = kwargs.get('kind')
-        self.solver.save_prediction(predicted_data, kind=kind)
+        def save_metrics(api_manager):
+            return self.metric_dict.to_csv(
+                f'{self.manager.compute_config.output_folder}/metrics.csv')
 
-    def save_metrics(self, **kwargs) -> None:
-        """
-        Method to save metrics locally in csv format
+        def save_preds(api_manager):
+            return pd.DataFrame(api_manager.predicted_labels).to_csv(
+                f'{self.manager.compute_config.output_folder}/labels.csv')
 
-        Args:
-            **kwargs: dictionary with metrics
+        method_dict = {'metrics': save_metrics, 'model': save_model, 'opt_hist': save_opt_hist,
+                       'prediction': save_preds}
+        self.manager.create_folder(self.manager.compute_config.output_folder)
+        if not is_fedot_solver:
+            del method_dict['opt_hist']
 
-        Returns:
-            None
+        def save_all(api_manager):
+            for method in method_dict.values():
+                try:
+                    method(api_manager)
+                except Exception as ex:
+                    self.manager.logger.info(f'Error during saving. Exception - {ex}')
 
-        """
-        self.solver.save_metrics(**kwargs)
+        Either(value=self.manager, monoid=[self.manager, mode.__contains__('all')]). \
+            either(left_function=lambda api_manager: method_dict[mode](self.manager),
+                   right_function=lambda api_manager: save_all(api_manager))
 
     def load(self, path):
         """Loads saved Industrial model from disk
@@ -373,21 +448,6 @@ class FedotIndustrial(Fedot):
             right_function=lambda path: Pipeline().load(path))
         return pipeline
 
-    def save_optimization_history(self, return_history: bool = False):
-        return self.solver.history if return_history else self.solver.history.save(
-            f"{self.api_controller.output_folder}/"
-            f"optimization_history.json")
-
-    def save_best_model(self):
-        Either(value=self.solver,
-               monoid=[self.solver, self.api_controller.condition_check.solver_is_fedot_class(self.solver)]).either(
-            left_function=lambda pipeline: pipeline.save(path=self.api_controller.output_folder,
-                                                         create_subdir=True,
-                                                         is_datetime_in_path=True),
-            right_function=lambda solver: solver.current_pipeline.save(path=self.api_controller.output_folder,
-                                                                       create_subdir=True,
-                                                                       is_datetime_in_path=True))
-
     def explain(self, explaing_config: dict = {}):
         """Explain model's prediction via time series points perturbation
 
@@ -404,15 +464,17 @@ class FedotIndustrial(Fedot):
         name = explaing_config.get('name', 'test')
         method = explaing_config.get('method', 'point')
 
-        explainer = self.api_controller.explain_methods[method](model=self,
-                                                                features=self.predict_data.features.squeeze(),
-                                                                target=self.predict_data.target)
+        explainer = self.manager.industrial_config.explain_methods[method](
+            model=self,
+            features=self.manager.predict_data.features.squeeze(),
+            target=self.manager.predict_data.target
+        )
 
         explainer.explain(n_samples=samples, window=window, method=metric)
         explainer.visual(metric=metric, threshold=threshold, name=name)
 
     def return_report(self) -> pd.DataFrame:
-        return self.solver.return_report() if isinstance(self.solver, Fedot) else None
+        return self.manager.solver.return_report() if isinstance(self.manager.solver, Fedot) else None
 
     def vis_optimisation_history(self, opt_history_path: str = None,
                                  mode: str = 'all',
@@ -434,14 +496,21 @@ class FedotIndustrial(Fedot):
                 history_visualizer.diversity_population, dict(
                     save_path='diversity_population.gif', fps=1))}
 
-        def plot_func(mode): return vis_func[mode][0](**vis_func[mode][1])
+        def plot_func(mode):
+            return vis_func[mode][0](**vis_func[mode][1])
 
         Either(value=vis_func,
                monoid=[mode, mode == 'all']).either(
             left_function=plot_func,
-            right_function=lambda vis_func: [func(**params) for func, params in vis_func.values()])
+            right_function=lambda vis_func: [func(**params) for func, params in vis_func.values()]
+        )
         return history_visualizer.history if return_history else None
 
     def shutdown(self):
-        self.dask_client.close()
-        del self.dask_client
+        """Shutdown Dask client"""
+        if self.manager.dask_client is not None:
+            self.manager.dask_client.close()
+            del self.manager.dask_client
+        if self.manager.dask_cluster is not None:
+            self.manager.dask_cluster.close()
+            del self.manager.dask_cluster

@@ -4,6 +4,7 @@ import shutil
 import urllib.request as request
 import zipfile
 from pathlib import Path
+from typing import Optional, Union
 
 import chardet
 import pandas as pd
@@ -15,9 +16,9 @@ from scipy.io.arff import loadarff
 from sktime.datasets import load_from_tsfile_to_dataframe
 from tqdm import tqdm
 
-from fedot_ind.api.utils.path_lib import PROJECT_PATH
 from fedot_ind.core.architecture.settings.computational import backend_methods as np
 from fedot_ind.core.repository.constanst_repository import M4_PREFIX
+from fedot_ind.tools.serialisation.path_lib import PROJECT_PATH, EXAMPLES_DATA_PATH
 
 
 class DataLoader:
@@ -33,8 +34,9 @@ class DataLoader:
         >>> train_data, test_data = data_loader.load_data()
     """
 
-    def __init__(self, dataset_name: str, folder: str = None):
+    def __init__(self, dataset_name: str, folder: Optional[str] = None, source_url: Optional[str] = None):
         self.logger = logging.getLogger('DataLoader')
+        self.url = source_url if source_url is not None else f'http://www.timeseriesclassification.com/aeon-toolkit/'
         self.dataset_name = dataset_name
         self.folder = folder
         self.forecast_data_source = {
@@ -44,63 +46,62 @@ class DataLoader:
             'M5': M5.load,
             'monash_tsf': load_dataset
         }
-        self.detection_data_source = {
-            'SKAB': self.local_skab_load
-        }
 
-    def load_forecast_data(self, folder=None):
-        loader = self.forecast_data_source[folder]
+    def load_forecast_data(self, forecast_family: Optional[str] = None, folder: Optional[Union[Path, str]] = None):
+        if forecast_family not in self.forecast_data_source:
+            forecast_family = self.dataset_name.get('benchmark') if isinstance(self.dataset_name, dict) else 'M4'
+        if folder is None:
+            folder = EXAMPLES_DATA_PATH
+        loader = self.forecast_data_source[forecast_family]
         dataset_name = self.dataset_name.get('dataset') if isinstance(self.dataset_name, dict) else self.dataset_name
-        group_df, _, _ = loader(directory='data', group=f'{M4_PREFIX[dataset_name[0]]}')
+        group_df, _, _ = loader(directory=folder, group=f'{M4_PREFIX[dataset_name[0]]}')
         ts_df = group_df[group_df['unique_id'] == dataset_name]
         del ts_df['unique_id']
         ts_df = ts_df.set_index('datetime') if 'datetime' in ts_df.columns else ts_df.set_index('ds')
-        return ts_df, None
-
-    def load_detection_data(self, folder=None):
-        loader = self.detection_data_source['SKAB']
-        return loader(directory=folder, group=self.dataset_name)
+        train_data = ts_df.values.flatten()
+        target = train_data[-self.dataset_name['task_params']['forecast_length']:].flatten()
+        train_data = (train_data, target)
+        return train_data, train_data
 
     @staticmethod
-    def local_m4_load(group=None):
-        path_to_result = PROJECT_PATH + '/examples/data/forecasting/'
+    def local_m4_load(group: Optional[str] = None):
+        path_to_result = EXAMPLES_DATA_PATH + '/forecasting/'
         for result_cvs in os.listdir(path_to_result):
             if result_cvs.__contains__(group):
                 return pd.read_csv(Path(path_to_result, result_cvs))
 
-    @staticmethod
-    def local_skab_load(directory='other', group=None):
-        path_to_result = PROJECT_PATH + f'/examples/data/detection/data/{directory}'
-        df = pd.read_csv(Path(path_to_result, f'{group}.csv'),
-                         index_col='datetime',
-                         sep=';',
-                         parse_dates=True)
-        x_train, y_train = df.iloc[:120, :-2].values, df.iloc[:120, -2].values
-        x_test, y_test = df.iloc[120:, :-2].values, df.iloc[120:, -2].values
-        return (x_train, y_train), (x_test, y_test)
+    def load_detection_data(self, dataset_name: Optional[dict] = {}):
+        if dataset_name is None:
+            dataset_name = {}
+        folder = dataset_name.get('benchmark', 'valve1')
+        dataset = dataset_name.get('dataset', '1')
+        path_to_skab_data = EXAMPLES_DATA_PATH + f'/benchmark/detection/data/{folder}/{dataset}.csv'
+        df = pd.read_csv(path_to_skab_data, index_col='datetime', sep=';', parse_dates=True)
+        train_idx = dataset_name.get('train_data_size', 'anomaly-free')
+        if isinstance(train_idx, str):
+            train_data = EXAMPLES_DATA_PATH + f'/benchmark/detection/data/{train_idx}/{train_idx}.csv'
+            train_data = pd.read_csv(train_data, index_col='datetime', sep=';', parse_dates=True)
+            label = np.array([0 for _ in range(len(train_data))])
+            return (train_data.values, label), (df.iloc[:, :-2].values, df.iloc[:, -2].values)
+        return None, None
 
-    def _load_benchmark_data(self, specific_strategy):
-        bench = self.dataset_name['benchmark']
+    def _load_benchmark_data(self, specific_strategy: str):
+        train_data, test_data = None, None
         if specific_strategy == 'anomaly_detection':
-            self.dataset_name = self.dataset_name['dataset']
-            train_data, test_data = self.load_detection_data(bench)
+            train_data, test_data = self.load_detection_data(self.dataset_name)
         elif specific_strategy in ['ts_forecasting', 'forecasting_assumptions']:
-            train_data, test_data = self.load_forecast_data(bench)
-            target = train_data.values[-self.dataset_name['task_params']['forecast_length']:].flatten()
-            train_data = (train_data, target)
-            test_data = train_data
+            train_data, test_data = self.load_forecast_data(self.folder)
         return train_data, test_data
 
-    def load_custom_data(self, specific_strategy):
-        custom_strategy = specific_strategy in ['anomaly_detection', 'ts_forecasting', 'forecasting_assumptions']
+    def load_custom_data(self, specific_strategy: Optional[str] = None):
         dict_dataset = isinstance(self.dataset_name, dict)
         if dict_dataset and 'train_data' in self.dataset_name.keys():
             return self.dataset_name['train_data'], self.dataset_name['test_data']
-        elif custom_strategy:
+        elif specific_strategy is not None:
             return self._load_benchmark_data(specific_strategy)
         return None, None
 
-    def load_data(self, shuffle=True) -> tuple:
+    def load_data(self, shuffle: bool = True) -> tuple:
         """Load data for classification experiment locally or externally from UCR archive.
 
         Returns:
@@ -112,7 +113,7 @@ class DataLoader:
                                                               data_path=data_path,
                                                               shuffle=shuffle)
         if train_data is None:
-            self.logger.info(f'Downloading {dataset_name} from UCR archive...')
+            self.logger.info(f'Downloading {dataset_name} from {self.url}...')
 
             # Create temporary folder for downloaded data
             cache_path = os.path.join(PROJECT_PATH, 'temp_cache/')
@@ -121,12 +122,12 @@ class DataLoader:
             for _ in (download_path, temp_data_path):
                 os.makedirs(_, exist_ok=True)
 
-            url = f"http://www.timeseriesclassification.com/aeon-toolkit/{dataset_name}.zip"
+            url = self.url + f'/{dataset_name}.zip'
             request.urlretrieve(url, download_path + f'temp_data_{dataset_name}')
             try:
                 zipfile.ZipFile(download_path + f'temp_data_{dataset_name}').extractall(temp_data_path + dataset_name)
             except zipfile.BadZipFile:
-                raise FileNotFoundError(f'Cannot extract data: {dataset_name} dataset not found in UCR archive')
+                raise FileNotFoundError(f'Cannot extract data: {dataset_name} dataset not found in {self.url}')
             else:
                 self.logger.info(f'{dataset_name} data downloaded. Unpacking...')
                 train_data, test_data = self.extract_data(dataset_name, temp_data_path)
@@ -143,7 +144,7 @@ class DataLoader:
 
         return train_data, test_data
 
-    def read_train_test_files(self, data_path, dataset_name: str, shuffle: bool = True):
+    def read_train_test_files(self, data_path: Union[Path, str], dataset_name: str, shuffle: bool = True):
 
         dataset_dir_path = os.path.join(data_path, dataset_name)
         file_path = dataset_dir_path + f'/{dataset_name}_TRAIN'
@@ -179,7 +180,7 @@ class DataLoader:
         return is_multivariate, (x_train, y_train), (x_test, y_test)
 
     @staticmethod
-    def predict_encoding(file_path: str, n_lines: int = 20) -> str:
+    def predict_encoding(file_path: Union[Path, str], n_lines: int = 20) -> str:
         with Path(file_path).open('rb') as f:
             rawdata = b''.join([f.readline() for _ in range(n_lines)])
         return chardet.detect(rawdata)['encoding']
@@ -893,6 +894,7 @@ class DataLoader:
             y_train: train target array of shape (n_samples,)
             x_test: test dataframe of shape (n_samples, dim) with pd.Series of shape (ts_length,)
             y_test: test target array of shape (n_samples,)
+
         """
         def load_process_data(path_to_dataset):
             data, meta = loadarff(path_to_dataset)

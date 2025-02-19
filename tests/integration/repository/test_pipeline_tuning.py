@@ -4,7 +4,8 @@ from fedot.core.pipelines.pipeline_builder import PipelineBuilder
 from fedot.core.pipelines.tuning.tuner_builder import TunerBuilder
 from golem.core.tuning.sequential import SequentialTuner
 
-from fedot_ind.api.utils.data import init_input_data
+from fedot_ind.core.models.ts_forecasting.lagged_strategy.eigen_forecaster import EigenAR
+from fedot_ind.core.operation.dummy.dummy_operation import init_input_data
 from fedot_ind.core.repository.initializer_industrial_models import IndustrialModels
 from fedot_ind.tools.loader import DataLoader
 
@@ -12,11 +13,7 @@ from fedot_ind.tools.loader import DataLoader
 def test_fedot_multi_series():
     with IndustrialModels():
         train_data, test_data = initialize_multi_data()
-        pipeline = PipelineBuilder() \
-            .add_node('eigen_basis', params={'window_size': None}) \
-            .add_node('quantile_extractor') \
-            .add_node('rf') \
-            .build()
+        pipeline = EigenAR({})
         pipeline.fit(train_data)
         predict = pipeline.predict(test_data, output_mode='labels')
         print(F1.metric(test_data, predict))

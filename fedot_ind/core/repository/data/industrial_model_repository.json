@@ -214,7 +214,7 @@
     },
     "fedot_NN_forecasting": {
       "tasks": "[TaskTypesEnum.ts_forecasting]",
-      "input_type": "[DataTypesEnum.ts]",
+      "input_type": "[DataTypesEnum.ts, DataTypesEnum.table]",
       "output_type": "[DataTypesEnum.table]",
       "accepted_node_types": [
         "any"
@@ -224,7 +224,8 @@
         "fedot_ind.core.operation.interfaces.industrial_model_strategy",
         "FedotNNTimeSeriesStrategy"
       ],
-      "tags": ["time_series"
+      "tags": [
+        "time_series"
       ],
       "description": "Implementations of fedot NN forecasting strategy"
     },
@@ -386,24 +387,59 @@
         "deep", "ts_model"
       ],
 	  "input_type": "[DataTypesEnum.ts]"
-    },    
+    },
     "tcn_model": {
-      "meta": "ts_model",
-      "presets": ["fast_train", "best_quality", "ts"],
-      "tags": [
-        "deep", "ts_model"
+      "meta": "fedot_NN_forecasting",
+      "presets": [
+        "fast_train",
+        "best_quality",
+        "ts"
       ],
-	  "input_type": "[DataTypesEnum.ts]"
+      "tags": [
+        "deep",
+        "ts_model"
+      ],
+      "input_type": "[DataTypesEnum.ts]"
     },
     "deepar_model": {
+      "meta": "fedot_NN_forecasting",
+      "presets": [
+        "ts"
+      ],
+      "tags": [],
+      "input_type": "[DataTypesEnum.ts]"
+    },
+    "eigen_forecaster": {
       "meta": "ts_model",
-      "presets": ["ts"],
+      "presets": [
+        "ts"
+      ],
+      "tags": [],
+      "input_type": "[DataTypesEnum.ts]"
+    },
+    "topo_forecaster": {
+      "meta": "ts_model",
+      "presets": [
+        "ts"
+      ],
+      "tags": [],
+      "input_type": "[DataTypesEnum.ts]"
+    },
+    "lagged_forecaster": {
+      "meta": "ts_model",
+      "presets": [
+        "ts"
+      ],
       "tags": [],
       "input_type": "[DataTypesEnum.ts]"
     },
     "adareg": {
       "meta": "sklearn_regr",
-      "presets": ["fast_train", "ts", "*tree"],
+      "presets": [
+        "fast_train",
+        "ts",
+        "*tree"
+      ],
       "tags": [
         "boosting",
         "non_multi",
@@ -455,14 +491,14 @@
       "meta": "sklearn_class",
       "presets": ["*tree"],
       "tags": [
-        "boosting", "non-default", "non_linear"
+        "boosting", "non_linear"
       ]
     },
     "catboostreg": {
       "meta": "sklearn_regr",
       "presets": ["*tree"],
       "tags": [
-        "boosting", "non_multi", "non-default", "non_linear"
+        "boosting", "non_multi", "non_linear"
       ]
     },
     "dt": {
@@ -613,17 +649,109 @@
     },
     "rf": {
       "meta": "sklearn_class",
-      "presets": ["fast_train", "*tree"],
-      "tags": ["tree", "non_linear"]
+      "presets": [
+        "fast_train",
+        "*tree"
+      ],
+      "tags": [
+        "tree",
+        "non_linear"
+      ]
+    },
+    "industrial_stat_clf": {
+      "meta": "sklearn_class",
+      "presets": [
+        "fast_train",
+        "*tree"
+      ],
+      "tags": [
+        "tree",
+        "non_linear"
+      ]
+    },
+    "industrial_freq_clf": {
+      "meta": "sklearn_class",
+      "presets": [
+        "fast_train",
+        "*tree"
+      ],
+      "tags": [
+        "tree",
+        "non_linear"
+      ]
+    },
+    "industrial_manifold_clf": {
+      "meta": "sklearn_class",
+      "presets": [
+        "fast_train",
+        "*tree"
+      ],
+      "tags": [
+        "tree",
+        "non_linear"
+      ]
+    },
+    "industrial_stat_reg": {
+      "meta": "sklearn_regr",
+      "presets": [
+        "fast_train",
+        "*tree"
+      ],
+      "tags": [
+        "tree",
+        "non_linear"
+      ]
+    },
+    "industrial_freq_reg": {
+      "meta": "sklearn_regr",
+      "presets": [
+        "fast_train",
+        "*tree"
+      ],
+      "tags": [
+        "tree",
+        "non_linear"
+      ]
+    },
+    "industrial_manifold_reg": {
+      "meta": "sklearn_regr",
+      "presets": [
+        "fast_train",
+        "*tree"
+      ],
+      "tags": [
+        "tree",
+        "non_linear"
+      ]
+    },
+    "pdl_clf": {
+      "meta": "sklearn_class",
+      "presets": [
+        "fast_train",
+        "*tree"
+      ],
+      "tags": [
+        "tree",
+        "non_linear"
+      ]
     },
     "rfr": {
       "meta": "sklearn_regr",
-      "presets": ["fast_train", "*tree"],
-      "tags": ["tree", "non_linear"]
+      "presets": [
+        "fast_train",
+        "*tree"
+      ],
+      "tags": [
+        "tree",
+        "non_linear"
+      ]
     },
     "ridge": {
       "meta": "sklearn_regr",
-      "presets": ["fast_train", "ts"],
+      "presets": [
+        "fast_train",
+        "ts"
+      ],
       "tags": [
         "simple",
         "linear",
@@ -675,25 +803,31 @@
     },
     "ets": {
       "meta": "ts_model",
-      "presets": ["fast_train", "ts"],
+      "presets": [
+        "fast_train",
+        "ts"
+      ],
       "tags": [
         "simple",
         "interpretable",
         "non_lagged",
         "non_linear"
       ],
-	  "input_type": "[DataTypesEnum.ts]"
+      "input_type": "[DataTypesEnum.ts]"
     },
     "locf": {
       "meta": "ts_model",
-      "presets": ["fast_train", "ts"],
+      "presets": [
+        "fast_train",
+        "ts"
+      ],
       "tags": [
         "non_linear",
         "simple",
         "interpretable",
         "non_lagged"
       ],
-	  "input_type": "[DataTypesEnum.ts]"
+      "input_type": "[DataTypesEnum.ts]"
     },
     "ts_naive_average": {
       "meta": "ts_model",
@@ -723,7 +857,19 @@
     },
     "treg": {
       "meta": "sklearn_regr",
-      "presets": ["*tree"],
+      "presets": [
+        "*tree"
+      ],
+      "tags": [
+        "tree",
+        "non_linear"
+      ]
+    },
+    "pdl_reg": {
+      "meta": "sklearn_regr",
+      "presets": [
+        "*tree"
+      ],
       "tags": [
         "tree",
         "non_linear"
@@ -731,9 +877,14 @@
     },
     "xgboost": {
       "meta": "sklearn_class",
-      "presets": ["*tree"],
+      "presets": [
+        "*tree"
+      ],
       "tags": [
-        "boosting", "tree", "non-default", "non_linear"
+        "boosting",
+        "tree",
+        "non-default",
+        "non_linear"
       ]
     },
     "xgbreg": {

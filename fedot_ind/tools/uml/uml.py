@@ -1,7 +1,7 @@
-import re
 import os
+import re
 
-from fedot_ind.api.utils.path_lib import DEFAULT_PATH_MODELS
+from fedot_ind.tools.serialisation.path_lib import DEFAULT_PATH_MODELS
 
 with open(DEFAULT_PATH_MODELS, 'r') as file:
     file_content = [string for string in file.read().split(

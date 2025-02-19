@@ -1,23 +1,37 @@
-from typing import Optional
-from typing import Union
+from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
 from fedot.core.data.data import InputData
 from fedot.core.operations.operation_parameters import OperationParameters
 from golem.core.dag.graph import Graph
-from sklearn.metrics import (accuracy_score, f1_score,
-                             log_loss, mean_absolute_error,
-                             mean_absolute_percentage_error,
-                             mean_squared_error, mean_squared_log_error,
-                             precision_score, r2_score, roc_auc_score)
-from sklearn.metrics import d2_absolute_error_score, explained_variance_score, max_error, median_absolute_error
+from sklearn.metrics import (
+    accuracy_score,
+    d2_absolute_error_score,
+    explained_variance_score,
+    f1_score,
+    log_loss,
+    max_error,
+    mean_absolute_error,
+    mean_absolute_percentage_error,
+    mean_squared_error,
+    mean_squared_log_error,
+    median_absolute_error,
+    precision_score,
+    r2_score,
+    roc_auc_score,
+)
 from sktime.performance_metrics.forecasting import mean_absolute_scaled_error
 
 from fedot_ind.core.architecture.settings.computational import backend_methods as np
+
 # from fedot_ind.core.architecture.preprocessing.data_convertor import DataConverter
-from fedot_ind.core.metrics.anomaly_detection.function import single_average_delay, \
-    single_evaluate_nab, single_detecting_boundaries, check_errors
+from fedot_ind.core.metrics.anomaly_detection.function import (
+    check_errors,
+    single_average_delay,
+    single_detecting_boundaries,
+    single_evaluate_nab,
+)
 
 
 class ParetoMetrics:
@@ -83,7 +97,7 @@ class RMSE(QualityMetric):
         return mean_squared_error(
             y_true=self.target,
             y_pred=self.predicted_labels,
-            squared=False)
+            squared=False) ** 0.5
 
 
 class SMAPE(QualityMetric):
@@ -228,8 +242,13 @@ def mape(A, F):
 def calculate_regression_metric(target,
                                 labels,
                                 rounding_order=3,
-                                metric_names=('r2', 'rmse', 'mae'),
+                                metric_names=None,
                                 **kwargs):
+
+    # Set default metrics
+    if metric_names is None:
+        metric_names = ('r2', 'rmse', 'mae')
+
     target = target.astype(float)
 
     def rmse(y_true, y_pred):
@@ -256,10 +275,13 @@ def calculate_regression_metric(target,
 def calculate_forecasting_metric(target,
                                  labels,
                                  rounding_order=3,
-                                 metric_names=('smape', 'rmse',
-                                               'mape'),
+                                 metric_names=None,
                                  **kwargs):
     target = target.astype(float)
+
+    # Set default metrics
+    if metric_names is None:
+        metric_names = ('smape', 'rmse', 'mape')
 
     def rmse(y_true, y_pred):
         return np.sqrt(mean_squared_error(y_true, y_pred))
@@ -285,18 +307,20 @@ def calculate_classification_metric(
         labels,
         probs,
         rounding_order=3,
-        metric_names=(
-            'f1',
-            # 'roc_auc',
-            'accuracy')):
+        metric_names=('f1', 'accuracy')):
+
+    # Set default metrics
+    if metric_names is None:
+        metric_names = ('f1', 'accuracy')
+
     metric_dict = {'accuracy': Accuracy,
                    'f1': F1,
                    # 'roc_auc': ROCAUC,
                    'precision': Precision,
                    'logloss': Logloss}
 
-    df = pd.DataFrame({name: func(target, labels, probs).metric(
-    ) for name, func in metric_dict.items() if name in metric_names}, index=[0])
+    df = pd.DataFrame({name: func(target, labels, probs).metric()
+                      for name, func in metric_dict.items() if name in metric_names}, index=[0])
     return df.round(rounding_order)
 
 

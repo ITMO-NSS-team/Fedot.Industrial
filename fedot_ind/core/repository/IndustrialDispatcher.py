@@ -4,6 +4,7 @@ import timeit
 from datetime import datetime
 from typing import Optional, Tuple
 
+import dask
 from golem.core.log import Log
 from golem.core.optimisers.genetic.evaluation import MultiprocessingDispatcher
 from golem.core.optimisers.genetic.operators.operator import EvaluationOperator, PopulationT
@@ -13,7 +14,7 @@ from golem.core.optimisers.opt_history_objects.individual import GraphEvalResult
 from golem.core.optimisers.timer import Timer
 from golem.utilities.memory import MemoryAnalytics
 from golem.utilities.utilities import determine_n_jobs
-from joblib import wrap_non_picklable_objects, parallel_backend
+from joblib import wrap_non_picklable_objects
 from pymonad.either import Either
 from pymonad.maybe import Maybe
 
@@ -30,17 +31,14 @@ class IndustrialDispatcher(MultiprocessingDispatcher):
         return self.evaluate_with_cache
 
     def _multithread_eval(self, individuals_to_evaluate):
-        with parallel_backend(backend='dask',
-                              n_jobs=self.n_jobs,
-                              scatter=[individuals_to_evaluate]
-                              ):
-            log = Log().get_parameters()
-            evaluation_results = list(map(lambda ind:
-                                          self.industrial_evaluate_single(self,
-                                                                          graph=ind.graph,
-                                                                          uid_of_individual=ind.uid,
-                                                                          logs_initializer=log),
-                                          individuals_to_evaluate))
+        log = Log().get_parameters()
+        evaluation_results = list(map(lambda ind:
+                                      self.industrial_evaluate_single(self,
+                                                                      graph=ind.graph,
+                                                                      uid_of_individual=ind.uid,
+                                                                      logs_initializer=log),
+                                      individuals_to_evaluate))
+        evaluation_results = dask.compute(*evaluation_results)
         return evaluation_results
 
     def _eval_at_least_one(self, individuals):
@@ -80,7 +78,22 @@ class IndustrialDispatcher(MultiprocessingDispatcher):
                             logging_level=logging.INFO)
         return successful_evals
 
-    # @delayed
+    @dask.delayed
+    def eval_ind(self, graph, uid_of_individual):
+        adapted_evaluate = self._adapter.adapt_func(self._evaluate_graph)
+        start_time = timeit.default_timer()
+        fitness, graph = adapted_evaluate(graph)
+        end_time = timeit.default_timer()
+        eval_time_iso = datetime.now().isoformat()
+        eval_res = GraphEvalResult(
+            uid_of_individual=uid_of_individual,
+            fitness=fitness,
+            graph=graph,
+            metadata={
+                'computation_time_in_seconds': end_time - start_time,
+                'evaluation_time_iso': eval_time_iso})
+        return eval_res
+
     @wrap_non_picklable_objects
     def industrial_evaluate_single(self,
                                    graph: OptGraph,
@@ -93,24 +106,11 @@ class IndustrialDispatcher(MultiprocessingDispatcher):
             IndustrialModels().setup_repository()
 
         graph = self.evaluation_cache.get(cache_key, graph)
-
-        if with_time_limit and self.timer.is_time_limit_reached():
-            return None
+        #
+        # if with_time_limit and self.timer.is_time_limit_reached():
+        #     return None
         if logs_initializer is not None:
             # in case of multiprocessing run
             Log.setup_in_mp(*logs_initializer)
 
-        adapted_evaluate = self._adapter.adapt_func(self._evaluate_graph)
-        start_time = timeit.default_timer()
-        fitness, graph = adapted_evaluate(graph)
-        end_time = timeit.default_timer()
-        eval_time_iso = datetime.now().isoformat()
-
-        eval_res = GraphEvalResult(
-            uid_of_individual=uid_of_individual,
-            fitness=fitness,
-            graph=graph,
-            metadata={
-                'computation_time_in_seconds': end_time - start_time,
-                'evaluation_time_iso': eval_time_iso})
-        return eval_res
+        return self.eval_ind(graph, uid_of_individual)

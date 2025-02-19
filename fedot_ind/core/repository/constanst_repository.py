@@ -1,4 +1,5 @@
 import math
+import pathlib
 from enum import Enum
 from multiprocessing import cpu_count
 
@@ -6,29 +7,46 @@ import numpy as np
 import pywt
 import spectrum
 from MKLpy.algorithms import FHeuristic, RMKL, MEMO, CKA, PWMK
+from dask_ml.decomposition import TruncatedSVD as DaskSVD
+from fedot.core.operations.evaluation.operation_implementations.models.boostings_implementations import \
+    FedotCatBoostRegressionImplementation, FedotCatBoostClassificationImplementation
 from fedot.core.pipelines.pipeline_builder import PipelineBuilder
 from fedot.core.repository.dataset_types import DataTypesEnum
 from fedot.core.repository.metrics_repository import ClassificationMetricsEnum, RegressionMetricsEnum
 from fedot.core.repository.tasks import Task, TaskTypesEnum, TsForecastingParams
 from golem.core.tuning.optuna_tuner import OptunaTuner
+from golem.core.tuning.sequential import SequentialTuner
 from golem.core.tuning.simultaneous import SimultaneousTuner
+from lightgbm.sklearn import LGBMClassifier, LGBMRegressor
 from scipy.spatial.distance import euclidean, cosine, cityblock, correlation, chebyshev, \
     minkowski
+from sklearn.ensemble import ExtraTreesRegressor, GradientBoostingClassifier, \
+    RandomForestClassifier
+from sklearn.linear_model import (LinearRegression as linreg,
+                                  Lasso as SklearnLassoReg,
+                                  LogisticRegression as SklearnLogReg,
+                                  Ridge as SklearnRidgeReg,
+                                  SGDRegressor as SklearnSGD
+                                  )
+from sklearn.neural_network import MLPClassifier
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from torch import nn
+from xgboost import XGBRegressor
 
 from fedot_ind.core.metrics.metrics_implementation import calculate_classification_metric, calculate_regression_metric, \
     calculate_forecasting_metric, calculate_detection_metric
 from fedot_ind.core.models.nn.network_modules.losses import CenterLoss, CenterPlusLoss, ExpWeightedLoss, FocalLoss, \
     HuberLoss, LogCoshLoss, MaskedLossWrapper, RMSELoss, SMAPELoss, TweedieLoss
-from fedot_ind.core.models.quantile.stat_features import autocorrelation, ben_corr, crest_factor, energy, \
+from fedot_ind.core.operation.transformation.data.hankel import HankelMatrix
+from fedot_ind.core.operation.transformation.representation.statistical.stat_features import autocorrelation, ben_corr, \
+    crest_factor, energy, \
     hjorth_complexity, hjorth_mobility, hurst_exponent, interquartile_range, kurtosis, mean_ema, mean_moving_median, \
     mean_ptp_distance, n_peaks, pfd, ptp_amp, q25, q5, q75, q95, shannon_entropy, skewness, slope, zero_crossing_rate
-from fedot_ind.core.models.topological.topofeatures import AverageHoleLifetimeFeature, \
+from fedot_ind.core.operation.transformation.representation.topological.topofeatures import AverageHoleLifetimeFeature, \
     AveragePersistenceLandscapeFeature, BettiNumbersSumFeature, HolesNumberFeature, MaxHoleLifeTimeFeature, \
     PersistenceDiagramsExtractor, PersistenceEntropyFeature, RadiusAtMaxBNFeature, RelevantHolesNumber, \
     SimultaneousAliveHolesFeature, SumHoleLifetimeFeature
-from fedot_ind.core.models.ts_forecasting.eigen_autoreg import EigenAR
-from fedot_ind.core.operation.transformation.data.hankel import HankelMatrix
+from fedot_ind.tools.serialisation.path_lib import PROJECT_PATH
 
 industrial_model_params_dict = dict(quantile_extractor={'window_size': 10,
                                                         'stride': 1,
@@ -147,6 +165,22 @@ class DataTypeConstant(Enum):
     TRAJECTORY_MATRIX = HankelMatrix
 
 
+class PathConstant(Enum):
+    IND_DATA_OPERATION_PATH = pathlib.Path(PROJECT_PATH, 'fedot_ind', 'core', 'repository', 'data',
+                                           'industrial_data_operation_repository.json')
+    DEFAULT_DATA_OPERATION_PATH = pathlib.Path('data_operation_repository.json')
+    IND_MODEL_OPERATION_PATH = pathlib.Path(PROJECT_PATH, 'fedot_ind', 'core', 'repository', 'data',
+                                            'industrial_model_repository.json')
+    DEFAULT_MODEL_OPERATION_PATH = pathlib.Path('model_repository.json')
+
+
+class SolverConstant(Enum):
+    SOLVER_MODELS = {'np_svd_solver': np.linalg.svd,
+                     'np_qr_solver': np.linalg.qr,
+                     'dask_svd_solver': DaskSVD
+                     }
+
+
 class FeatureConstant(Enum):
     STAT_METHODS = {
         'mean_': np.mean,
@@ -158,6 +192,13 @@ class FeatureConstant(Enum):
         'q25_': q25,
         'q75_': q75,
         'q95_': q95
+    }
+    BAGGING_METHOD = {
+        'mean': np.mean,
+        'median': np.median,
+        'max': np.max,
+        'min': np.min,
+        'weighted': linreg
     }
 
     STAT_METHODS_GLOBAL = {
@@ -275,7 +316,7 @@ class FedotOperationConstant(Enum):
                          }
     FEDOT_TUNING_METRICS = {
         'classification': ClassificationMetricsEnum.f1,
-        'ts_forecasting': RegressionMetricsEnum.MAPE,
+        'ts_forecasting': RegressionMetricsEnum.RMSE,  # RegressionMetricsEnum.MAPE,
         'regression': RegressionMetricsEnum.RMSE}
     FEDOT_DATA_TYPE = {
         'tensor': DataTypesEnum.image,
@@ -284,6 +325,7 @@ class FedotOperationConstant(Enum):
     FEDOT_TUNER_STRATEGY = {
         'optuna': OptunaTuner,
         'simultaneous': SimultaneousTuner,
+        'sequential': SequentialTuner,
     }
     FEDOT_HEAD_ENSEMBLE = {'regression': 'treg',
                            'classification': 'xgboost'}
@@ -317,33 +359,72 @@ class FedotOperationConstant(Enum):
     ]
 
     FEDOT_ASSUMPTIONS = {
-        'classification': PipelineBuilder().add_node('channel_filtration').
+        'classification': PipelineBuilder().
         add_node('quantile_extractor', params=stat_params).add_node('catboost', params=catboost_params),
         'classification_tabular': PipelineBuilder().add_node('rf', params=rf_params),
         'regression': PipelineBuilder().add_node('quantile_extractor', params=stat_params).add_node('treg'),
         'regression_tabular': PipelineBuilder().add_node('treg'),
         'anomaly_detection': PipelineBuilder().add_node('iforest_detector'),
-        'ts_forecasting': PipelineBuilder().add_node('ar')}
+        'ts_forecasting': PipelineBuilder().add_node('ar')
+    }
 
     FEDOT_TS_FORECASTING_ASSUMPTIONS = {
-        'eigen_ar': EigenAR,
-        # 'fedot_forecast': PipelineBuilder().add_node('fedot_forecast'),
-        # 'nbeats': PipelineBuilder().add_node('nbeats_model'),
+        'nbeats': PipelineBuilder().add_node('nbeats_model'),
     }
+
+    FEDOT_INDUSTRIAL_STRATEGY = ['federated_automl',
+                                 'kernel_automl',
+                                 'forecasting_assumptions',
+                                 'forecasting_exogenous',
+                                 'lora_strategy',
+                                 'sampling_strategy']
 
     FEDOT_ENSEMBLE_ASSUMPTIONS = {
         'classification': PipelineBuilder().add_node('logit'),
         'regression': PipelineBuilder().add_node('treg')
     }
-
+    # mutation order - [param_change,model_change,add_preproc_model,drop_model,add_model]
     FEDOT_MUTATION_STRATEGY = {
-        'params_mutation_strategy': [0.4, 0.2, 0.2, 0.1, 0.1],
+        'params_mutation_strategy': [0.7, 0.3, 0.00, 0.00, 0.0],
         'growth_mutation_strategy': [0.15, 0.15, 0.3, 0.1, 0.3],
         'regularization_mutation_strategy': [0.2, 0.3, 0.1, 0.3, 0.1],
+        'initial_population_diversity_strategy': [0.0, 0.5, 0.5, 0.0, 0.0],
+        'unique_population_strategy': [0.0, 0.25, 0.5, 0.0, 0.25],
     }
 
     EXPLAINABLE_MODELS = ['recurrence_extractor',
                           ]
+    SKLEARN_CLF_MODELS = {
+        # boosting models (bid datasets)
+        'xgboost': GradientBoostingClassifier,
+        'catboost': FedotCatBoostClassificationImplementation,
+        # solo linear models
+        'logit': SklearnLogReg,
+        # solo tree models
+        'dt': DecisionTreeClassifier,
+        # ensemble tree models
+        'rf': RandomForestClassifier,
+        # solo nn models
+        'mlp': MLPClassifier,
+        # external models
+        'lgbm': LGBMClassifier,
+    }
+
+    SKLEARN_REG_MODELS = {
+        # boosting models (bid datasets)
+        'xgbreg': XGBRegressor,
+        'sgdr': SklearnSGD,
+        # ensemble tree models (big datasets)
+        'treg': ExtraTreesRegressor,
+        # solo linear models with regularization
+        'ridge': SklearnRidgeReg,
+        'lasso': SklearnLassoReg,
+        # solo tree models (small datasets)
+        'dtreg': DecisionTreeRegressor,
+        # external models
+        'lgbmreg': LGBMRegressor,
+        "catboostreg": FedotCatBoostRegressionImplementation
+    }
 
 
 class ModelCompressionConstant(Enum):
@@ -737,6 +818,7 @@ class UnitTestConstant(Enum):
 
 STAT_METHODS = FeatureConstant.STAT_METHODS.value
 STAT_METHODS_GLOBAL = FeatureConstant.STAT_METHODS_GLOBAL.value
+BAGGING_METHOD = FeatureConstant.BAGGING_METHOD.value
 PERSISTENCE_DIAGRAM_FEATURES = FeatureConstant.PERSISTENCE_DIAGRAM_FEATURES.value
 PERSISTENCE_DIAGRAM_EXTRACTOR = FeatureConstant.PERSISTENCE_DIAGRAM_EXTRACTOR.value
 DISCRETE_WAVELETS = FeatureConstant.DISCRETE_WAVELETS.value
@@ -752,6 +834,11 @@ KERNEL_BASELINE_FEATURE_GENERATORS = KernelsConstant.KERNEL_BASELINE_FEATURE_GEN
 KERNEL_BASELINE_NODE_LIST = KernelsConstant.KERNEL_BASELINE_NODE_LIST.value
 KERNEL_DISTANCE_METRIC = KernelsConstant.KERNEL_DISTANCE_METRIC.value
 
+SOLVER_MODELS = SolverConstant.SOLVER_MODELS.value
+DEFAULT_SVD_SOLVER = SOLVER_MODELS['np_svd_solver']
+DEFAULT_QR_SOLVER = SOLVER_MODELS['np_qr_solver']
+DASK_SVD_SOLVER = SOLVER_MODELS['dask_svd_solver']
+
 AVAILABLE_ANOMALY_DETECTION_OPERATIONS = FedotOperationConstant.AVAILABLE_ANOMALY_DETECTION_OPERATIONS.value
 AVAILABLE_REG_OPERATIONS = FedotOperationConstant.AVAILABLE_REG_OPERATIONS.value
 AVAILABLE_CLS_OPERATIONS = FedotOperationConstant.AVAILABLE_CLS_OPERATIONS.value
@@ -765,10 +852,13 @@ FEDOT_ASSUMPTIONS = FedotOperationConstant.FEDOT_ASSUMPTIONS.value
 FEDOT_API_PARAMS = FedotOperationConstant.FEDOT_API_PARAMS.value
 FEDOT_ENSEMBLE_ASSUMPTIONS = FedotOperationConstant.FEDOT_ENSEMBLE_ASSUMPTIONS.value
 FEDOT_TUNER_STRATEGY = FedotOperationConstant.FEDOT_TUNER_STRATEGY.value
+FEDOT_INDUSTRIAL_STRATEGY = FedotOperationConstant.FEDOT_INDUSTRIAL_STRATEGY.value
 FEDOT_TS_FORECASTING_ASSUMPTIONS = FedotOperationConstant.FEDOT_TS_FORECASTING_ASSUMPTIONS.value
 FEDOT_DATA_TYPE = FedotOperationConstant.FEDOT_DATA_TYPE.value
 FEDOT_MUTATION_STRATEGY = FedotOperationConstant.FEDOT_MUTATION_STRATEGY.value
 EXPLAINABLE_MODELS = FedotOperationConstant.EXPLAINABLE_MODELS.value
+SKLEARN_CLF_IMP = FedotOperationConstant.SKLEARN_CLF_MODELS.value
+SKLEARN_REG_IMP = FedotOperationConstant.SKLEARN_REG_MODELS.value
 
 CPU_NUMBERS = ComputationalConstant.CPU_NUMBERS.value
 BATCH_SIZE_FOR_FEDOT_WORKER = ComputationalConstant.BATCH_SIZE_FOR_FEDOT_WORKER.value
@@ -779,6 +869,11 @@ PATIENCE_FOR_EARLY_STOP = ComputationalConstant.PATIENCE_FOR_EARLY_STOP.value
 MULTI_ARRAY = DataTypeConstant.MULTI_ARRAY.value
 MATRIX = DataTypeConstant.MATRIX.value
 TRAJECTORY_MATRIX = DataTypeConstant.TRAJECTORY_MATRIX.value
+
+IND_MODEL_OPERATION_PATH = PathConstant.IND_MODEL_OPERATION_PATH.value
+IND_DATA_OPERATION_PATH = PathConstant.IND_DATA_OPERATION_PATH.value
+DEFAULT_DATA_OPERATION_PATH = PathConstant.DEFAULT_DATA_OPERATION_PATH.value
+DEFAULT_MODEL_OPERATION_PATH = PathConstant.DEFAULT_MODEL_OPERATION_PATH.value
 
 ENERGY_THR = ModelCompressionConstant.ENERGY_THR.value
 DECOMPOSE_MODE = ModelCompressionConstant.DECOMPOSE_MODE.value

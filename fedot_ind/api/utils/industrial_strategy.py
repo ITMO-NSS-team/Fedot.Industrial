@@ -14,7 +14,8 @@ from pymonad.maybe import Maybe
 from fedot_ind.core.architecture.abstraction.client import use_default_fedot_client
 from fedot_ind.core.ensemble.kernel_ensemble import KernelEnsembler
 from fedot_ind.core.ensemble.random_automl_forest import RAFEnsembler
-from fedot_ind.core.operation.decomposition.matrix_decomposition.column_sampling_decomposition import CURDecomposition
+from fedot_ind.core.operation.decomposition.matrix_decomposition.method_impl.column_sampling_decomposition import \
+    CURDecomposition
 from fedot_ind.core.repository.constanst_repository import BATCH_SIZE_FOR_FEDOT_WORKER, FEDOT_WORKER_NUM, \
     FEDOT_WORKER_TIMEOUT_PARTITION, FEDOT_TUNING_METRICS, FEDOT_TUNER_STRATEGY, FEDOT_TS_FORECASTING_ASSUMPTIONS, \
     FEDOT_TASK
@@ -22,12 +23,19 @@ from fedot_ind.core.repository.industrial_implementations.abstract import build_
 
 
 class IndustrialStrategy:
-    def __init__(self,
-                 industrial_strategy_params,
-                 industrial_strategy,
-                 api_config,
-                 logger=None
-                 ):
+    """
+    Class for industrial strategy implementation
+
+    Args:
+        industrial_strategy_params: dict
+            Parameters for industrial strategy
+        industrial_strategy: str
+            Industrial strategy name
+        api_config: dict
+            Configuration for API
+    """
+
+    def __init__(self, industrial_strategy_params, industrial_strategy, api_config):
         self.industrial_strategy_params = industrial_strategy_params or {}
         self.finetune = self.industrial_strategy_params.get('finetune', False)
         self.finetune_params = self.industrial_strategy_params.get('tuning_params', {})
@@ -60,7 +68,7 @@ class IndustrialStrategy:
 
         self.ensemble_strategy = list(self.ensemble_strategy_dict.keys())
         self.random_label = None
-        self.config_dict = api_config
+        self.config = api_config
         self.logger = logging.getLogger('IndustrialStrategy')
         self.kernel_ensembler = KernelEnsembler
         self.RAF_workers = None
@@ -98,12 +106,12 @@ class IndustrialStrategy:
             batch_size = round(input_data.features.shape[0] / self.RAF_workers)
 
             min_timeout = 0.5
-            selected_timeout = round(self.config_dict['timeout'] / FEDOT_WORKER_TIMEOUT_PARTITION)
-            self.config_dict['timeout'] = max(min_timeout, selected_timeout)
+            selected_timeout = round(self.config['timeout'] / FEDOT_WORKER_TIMEOUT_PARTITION)
+            self.config['timeout'] = max(min_timeout, selected_timeout)
 
             self.logger.info(f'Batch_size - {batch_size}. Number of batches - {self.RAF_workers}')
 
-            self.solver = RAFEnsembler(composing_params=self.config_dict,
+            self.solver = RAFEnsembler(composing_params=self.config,
                                        n_splits=self.RAF_workers,
                                        batch_size=batch_size)
             self.logger.info(
@@ -114,7 +122,7 @@ class IndustrialStrategy:
         else:
             self.logger.info(f'RAF algorithm is not applicable: n_samples={n_samples} < {BATCH_SIZE_FOR_FEDOT_WORKER}. '
                              f'FEDOT algorithm was applied')
-            self.solver = Fedot(**self.config_dict)
+            self.solver = Fedot(**self.config)
             self.solver.fit(input_data)
 
     def _forecasting_strategy(self, input_data):
@@ -125,8 +133,8 @@ class IndustrialStrategy:
             {}).fit(input_data) for model_name, model_impl in FEDOT_TS_FORECASTING_ASSUMPTIONS.items()}
         self.solver = self._finetune_loop(kernel_model, kernel_data, self.finetune_params)
         # for model_name, init_assumption in FEDOT_TS_FORECASTING_ASSUMPTIONS.items():
-        #     self.config_dict['initial_assumption'] = init_assumption.build()
-        #     industrial = Fedot(**self.config_dict)
+        #     self.config['initial_assumption'] = init_assumption.build()
+        #     industrial = Fedot(**self.config)
         #     Maybe(
         #         value=industrial.fit(input_data),
         #         monoid=True).maybe(
@@ -144,7 +152,7 @@ class IndustrialStrategy:
                                                    target=input_data.target,
                                                    sampling_rate=sampling_rate)
             input_data.idx = np.arange(len(input_data.features))
-            industrial = Fedot(**self.config_dict)
+            industrial = Fedot(**self.config)
             Maybe(
                 value=industrial.fit(input_data),
                 monoid=True).maybe(
@@ -157,7 +165,7 @@ class IndustrialStrategy:
         self.logger.info('TS exogenous forecasting algorithm was applied')
         self.solver = {}
         init_assumption = PipelineBuilder().add_node('lagged', 0)
-        task = FEDOT_TASK[self.config_dict['problem']]
+        task = FEDOT_TASK[self.config['problem']]
         train_lagged, predict_lagged = train_test_data_setup(InputData(idx=np.arange(len(input_data.features)),
                                                                        features=input_data.features,
                                                                        target=input_data.features,
@@ -173,13 +181,13 @@ class IndustrialStrategy:
                                                                    target=input_data.features,
                                                                    task=task,
                                                                    data_type=DataTypesEnum.ts), 2)
-        dataset_dict.update({f'exog_ts': train_exog})
+        dataset_dict.update({'exog_ts': train_exog})
 
         train_dataset = MultiModalData(dataset_dict)
         init_assumption = init_assumption.join_branches('ridge')
-        self.config_dict['initial_assumption'] = init_assumption.build()
+        self.config['initial_assumption'] = init_assumption.build()
 
-        industrial = Fedot(**self.config_dict)
+        industrial = Fedot(**self.config)
         industrial.fit(train_dataset)
         self.solver = {'exog_model': industrial}
 
@@ -188,7 +196,7 @@ class IndustrialStrategy:
                        kernel_data: dict,
                        tuning_params: dict = {}):
         tuned_models = {}
-        tuning_params['metric'] = FEDOT_TUNING_METRICS[self.config_dict['problem']]
+        tuning_params['metric'] = FEDOT_TUNING_METRICS[self.config['problem']]
         for generator, kernel_model in kernel_ensemble.items():
             tuning_params['tuner'] = FEDOT_TUNER_STRATEGY['simultaneous']
             model_to_tune = deepcopy(kernel_model)
@@ -198,10 +206,8 @@ class IndustrialStrategy:
         return tuned_models
 
     def _kernel_strategy(self, input_data):
-        self.kernel_ensembler = KernelEnsembler(
-            self.industrial_strategy_params)
-        kernel_ensemble, kernel_data = self.kernel_ensembler.transform(
-            input_data).predict
+        self.kernel_ensembler = KernelEnsembler(self.industrial_strategy_params)
+        kernel_ensemble, kernel_data = self.kernel_ensembler.transform(input_data).predict
         self.solver = self._finetune_loop(kernel_ensemble, kernel_data)
 
     def _lora_strategy(self, input_data):

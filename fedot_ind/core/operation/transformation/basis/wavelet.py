@@ -1,5 +1,6 @@
 from typing import Optional, Tuple
 
+import dask
 import pywt
 from fedot.core.operations.operation_parameters import OperationParameters
 from pymonad.either import Either
@@ -25,25 +26,45 @@ class WaveletBasisImplementation(BasisDecompositionImplementation):
         super().__init__(params)
         self.n_components = params.get('n_components')
         self.wavelet = params.get('wavelet')
+        self.use_low_freq = params.get('low_freq', False)
+        self.scales = params.get('scale', WAVELET_SCALES)
         self.basis = None
         self.discrete_wavelets = DISCRETE_WAVELETS
         self.continuous_wavelets = CONTINUOUS_WAVELETS
-        self.scales = WAVELET_SCALES
+        self.return_feature_vector = params.get('compute_heuristic_representation', False)
 
     def __repr__(self):
         return 'WaveletBasisImplementation'
 
+    def _compute_heuristic_features(self, input_data):
+        wp = pywt.WaveletPacket(data=input_data[None, :], wavelet=self.wavelet,
+                                maxlevel=3, axis=1,
+                                mode='smooth')
+
+        wpd_approximate_3 = wp['aaa'].data.sum()
+        wpd_approximate_2 = wp['aa'].data.sum()
+        wpd_approximate_1 = wp['a'].data.sum()
+        wpd_detail_3 = wp['ddd'].data.sum()
+        wpd_detail_2 = wp['dd'].data.sum()
+        wpd_detail_1 = wp['d'].data.sum()
+        return np.array([wpd_approximate_3, wpd_approximate_2, wpd_approximate_1]).squeeze(), \
+            np.array([wpd_detail_3, wpd_detail_2, wpd_detail_1]).squeeze()
+
     def _decompose_signal(self, input_data) -> Tuple[np.array, np.array]:
-        if self.wavelet in self.discrete_wavelets:
-            high_freq, low_freq = pywt.dwt(input_data, self.wavelet, 'smooth')
+        if self.return_feature_vector:
+            return self._compute_heuristic_features(input_data)
         else:
-            high_freq, low_freq = pywt.cwt(data=input_data,
-                                           scales=self.scales,
-                                           wavelet=self.wavelet)
-            low_freq = high_freq[-1, :]
-            high_freq = np.delete(high_freq, (-1), axis=0)
-            low_freq = low_freq[np.newaxis, :]
-        return high_freq, low_freq
+            if self.wavelet in self.discrete_wavelets:
+                high_freq, low_freq = pywt.dwt(input_data, self.wavelet, 'smooth')
+
+            else:
+                high_freq, low_freq = pywt.cwt(data=input_data,
+                                               scales=self.scales,
+                                               wavelet=self.wavelet)
+                low_freq = high_freq[-1, :]
+                high_freq = np.delete(high_freq, (-1), axis=0)
+                low_freq = low_freq[np.newaxis, :]
+            return high_freq, low_freq
 
     def _decomposing_level(self) -> int:
         """The level of decomposition of the time series.
@@ -53,6 +74,7 @@ class WaveletBasisImplementation(BasisDecompositionImplementation):
         """
         return pywt.dwt_max_level(len(self.time_series), self.wavelet)
 
+    @dask.delayed
     def _transform_one_sample(self, series: np.array):
         return self._get_basis(series)
 
@@ -66,7 +88,8 @@ class WaveletBasisImplementation(BasisDecompositionImplementation):
 
         basis = Either.insert(data).then(decompose).then(threshold).value[0]
         basis = np.concatenate(basis)
-        return basis
+
+        return basis[-1, :] if self.use_low_freq else basis
 
     def _get_multidim_basis(self, data):
         def decompose(multidim_signal):

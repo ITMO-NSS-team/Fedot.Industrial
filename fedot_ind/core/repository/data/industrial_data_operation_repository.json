@@ -72,11 +72,19 @@
 			"tasks": "[TaskTypesEnum.ts_forecasting]",
 			"input_type": "[DataTypesEnum.ts, DataTypesEnum.multi_ts]",
 			"output_type": "[DataTypesEnum.ts, DataTypesEnum.table]",
-			"accepted_node_types": ["any"],
+			"accepted_node_types": [
+				"any"
+			],
 			"forbidden_node_types": "[]",
-			"strategies": ["fedot_ind.core.operation.interfaces.industrial_preprocessing_strategy", "IndustrialForecastingPreprocessingStrategy"],
-			"tags": ["time_series"],
-			"description": "Preprocessing for converting uni-variate time-series into table form or transform it"},
+			"strategies": [
+				"fedot_ind.core.operation.interfaces.industrial_preprocessing_strategy",
+				"IndustrialForecastingPreprocessingStrategy"
+			],
+			"tags": [
+				"time_series"
+			],
+			"description": "Preprocessing for converting uni-variate time-series into table form or transform it"
+		},
 		"text_preprocessing": {
 			"tasks": "[TaskTypesEnum.classification]",
 			"input_type": "[DataTypesEnum.text]",
@@ -163,6 +171,16 @@
     }
   },
   "operations": {
+    "bagging": {
+      "meta": "industrial_preprocessing",
+      "presets": [
+        "fast_train"
+      ],
+      "tags": [
+        "cat_features",
+        "non_applicable_for_ts"
+      ]
+    },
     "eigen_basis": {
       "meta": "industrial_preprocessing",
       "presets": [
@@ -220,13 +238,14 @@
       ]
 	},
       "topological_extractor": {
-        "meta": "custom_preprocessing",
+        "meta": "industrial_preprocessing",
         "presets": [
           "fast_train"
         ],
         "tags": [
           "extractor"
-        ]},
+        ]
+      },
     "minirocket_extractor": {
       "meta": "industrial_preprocessing",
       "presets": [

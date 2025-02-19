@@ -4,9 +4,9 @@ from pathlib import Path
 import pandas as pd
 from sklearn.metrics import f1_score, roc_auc_score
 
-from fedot_ind.api.utils.path_lib import PROJECT_PATH
 from fedot_ind.core.architecture.settings.computational import backend_methods as np
 from fedot_ind.core.metrics.metrics_implementation import calculate_forecasting_metric
+from fedot_ind.tools.serialisation.path_lib import PROJECT_PATH
 
 ts_datasets = {
     'm4_yearly': Path(PROJECT_PATH, 'examples', 'data', 'ts', 'M4Yearly.csv'),

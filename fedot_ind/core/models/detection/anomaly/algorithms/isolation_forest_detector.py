@@ -24,7 +24,7 @@ class IsolationForestDetector(AnomalyDetector):
         super().__init__(params)
         self.random_state = self.params.get('random_state', 0)
         self.n_jobs = self.params.get('n_jobs', -1)
-        self.contamination = self.params.get('contamination', 0.0005)
+        self.contamination = self.params.get('contamination', 'auto')
         self.anomaly_threshold = self.params.get('anomaly_thr', 0.3)
         self.transformation_mode = 'full'
 

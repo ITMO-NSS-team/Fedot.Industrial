@@ -11,19 +11,16 @@ from fedot.core.pipelines.pipeline import Pipeline
 from fedot.core.repository.dataset_types import DataTypesEnum
 from fedot.core.repository.tasks import Task, TaskTypesEnum
 from pymonad.list import ListMonad
+from sklearn.linear_model import (
+    Lasso as SklearnLassoReg,
+    Ridge as SklearnRidgeReg
+)
 from sklearn.preprocessing import LabelEncoder
 from sklearn.svm import OneClassSVM
 
-from fedot_ind.api.utils.data import check_multivariate_data
 from fedot_ind.core.architecture.settings.computational import backend_methods as np
 from fedot_ind.core.architecture.settings.computational import default_device
-from fedot_ind.core.models.detection.anomaly.algorithms.arima_fault_detector import ARIMAFaultDetector
-from fedot_ind.core.models.detection.anomaly.algorithms.convolutional_autoencoder_detector import \
-    ConvolutionalAutoEncoderDetector
-from fedot_ind.core.models.detection.anomaly.algorithms.isolation_forest_detector import IsolationForestDetector
-from fedot_ind.core.models.detection.anomaly.algorithms.lstm_autoencoder_detector import LSTMAutoEncoderDetector
-from fedot_ind.core.models.detection.custom.stat_detector import StatisticalDetector
-from fedot_ind.core.repository.constanst_repository import MATRIX, MULTI_ARRAY
+from fedot_ind.core.operation.dummy.dummy_operation import check_multivariate_data
 
 
 class CustomDatasetTS:
@@ -121,13 +118,13 @@ class FedotConverter:
                                    target=target.astype(
                                        float).reshape(-1, 1),
                                    task=task_dict[task],
-                                   data_type=MULTI_ARRAY)
+                                   data_type=DataTypesEnum.image)
         else:
             input_data = InputData(idx=np.arange(len(features)),
                                    features=features.values,
                                    target=np.ravel(target).reshape(-1, 1),
                                    task=task_dict[task],
-                                   data_type=MATRIX)
+                                   data_type=DataTypesEnum.table)
         return input_data
 
     def convert_to_output_data(self,
@@ -138,10 +135,13 @@ class FedotConverter:
             output_data = prediction
         elif isinstance(prediction, list):
             output_data = prediction[0]
-            target = NumpyConverter(data=np.concatenate(
-                [p.target for p in prediction], axis=0)).convert_to_torch_format()
             predict = NumpyConverter(data=np.concatenate(
                 [p.predict for p in prediction], axis=0)).convert_to_torch_format()
+            if output_data.target is None:
+                target = predict
+            else:
+                target = NumpyConverter(data=np.concatenate(
+                    [p.target for p in prediction], axis=0)).convert_to_torch_format()
             output_data = OutputData(
                 idx=predict_data.idx,
                 features=predict_data.features,
@@ -189,15 +189,21 @@ class FedotConverter:
                 supplementary_data=self.input_data.supplementary_data)
         elif mode == 'channel_independent':
             feats = self.input_data.features
-            if self.data_type_condition.is_numpy_flatten:
-                feats = feats.reshape(1, -1)
-            elif self.data_type_condition.is_numpy_tensor and self.data_type_condition.have_one_sample:
-                feats = feats.reshape(
-                    feats.shape[1],
-                    1 * feats.shape[2])
-            elif self.data_type_condition.is_numpy_tensor and self.data_type_condition.have_one_channel:
-                feats = feats.squeeze().swapaxes(1, 0)
-            elif not self.data_type_condition.have_one_sample:
+            with_one_sample = self.data_type_condition.have_one_sample
+            with_one_channel = self.data_type_condition.have_one_channel
+            with_one_element = self.data_type_condition.have_one_element
+            is_original_flatten_row = self.data_type_condition.is_numpy_flatten
+            is_3d_tensor = self.data_type_condition.is_numpy_tensor
+            is_3d_tensor_with_one_channel_and_one_element = all([is_3d_tensor, with_one_channel, with_one_element])
+            is_3d_tensor_with_one_channel_and_some_element = all([is_3d_tensor, with_one_channel, not with_one_element])
+            is_3d_tensor_with_one_channel = all([is_3d_tensor, with_one_channel])
+            if is_original_flatten_row or is_3d_tensor_with_one_channel_and_one_element:  # ts preprocessing case
+                feats = feats.reshape(1, -1)  # add 1 channel using reshape
+            elif is_3d_tensor_with_one_channel:
+                feats = feats.reshape(feats.shape[1], 1 * feats.shape[2])  # reshape to 2d table concat on channel
+            elif is_3d_tensor_with_one_channel_and_some_element:
+                feats = feats.squeeze().swapaxes(1, 0)  # squeeze channel and swap axes for iteration
+            elif not with_one_sample:
                 feats = self.input_data.features.swapaxes(1, 0)
             input_data = [
                 InputData(
@@ -405,7 +411,10 @@ class ConditionConverter:
 
     @property
     def have_predict_method(self):
-        return dir(self.operation_example).__contains__('predict')
+        if hasattr(self.operation_example, 'predict'):
+            return True if callable(self.operation_example.predict) else False
+        else:
+            return False
 
     @property
     def have_predict_for_fit_method(self):
@@ -425,18 +434,25 @@ class ConditionConverter:
 
     @property
     def is_one_class_operation(self):
-        detector_models = (IsolationForestDetector,
-                           OneClassSVM,
-                           StatisticalDetector,
-                           ARIMAFaultDetector,
-                           ConvolutionalAutoEncoderDetector,
-                           LSTMAutoEncoderDetector,
-                           )
+        detector_models = (
+            # IsolationForestDetector,
+            OneClassSVM,
+            # StatisticalDetector,
+            # ARIMAFaultDetector,
+            # # ConvolutionalAutoEncoderDetector,
+            # LSTMAutoEncoderDetector,
+        )
         return isinstance(self.operation_implementation, detector_models)
 
     @property
     def is_industrial_detector(self):
-        return isinstance(self.operation_implementation, IsolationForestDetector)
+        return isinstance(self.operation_implementation, OneClassSVM)
+
+    @property
+    def is_lagged_regressor(self):
+        is_ridge_reg = isinstance(self.operation_implementation, SklearnRidgeReg)
+        is_lasso_reg = isinstance(self.operation_implementation, SklearnLassoReg)
+        return any([is_ridge_reg, is_lasso_reg])
 
     @property
     def is_sklearn_detector(self):
@@ -490,6 +506,10 @@ class ConditionConverter:
     def is_regression_of_forecasting_task(self):
         return self.train_data.task.task_type.value in [
             'regression', 'ts_forecasting']
+
+    @property
+    def is_forecasting_task(self):
+        return self.train_data.task.task_type.value in ['ts_forecasting']
 
     @property
     def is_multi_output_target(self):
@@ -554,7 +574,8 @@ class ApiConverter:
     def input_data_is_fedot_type(input_data):
         return isinstance(input_data, (InputData, MultiModalData))
 
-    def is_multiclf_with_labeling_problem(self, problem, target, predict):
+    @staticmethod
+    def is_multiclf_with_labeling_problem(problem, target, predict):
         clf_problem = problem == 'classification'
         uncorrect_labels = target.min() - predict.min() != 0
         multiclass = len(np.unique(predict).shape) != 1
@@ -585,11 +606,24 @@ class DataConverter(TensorConverter, NumpyConverter):
 
     @property
     def have_one_sample(self):
-        return self.numpy_data.shape[0] == 1
+        try:
+            return self.numpy_data.shape[0] == 1
+        except Exception:
+            return False
 
     @property
     def have_one_channel(self):
-        return self.numpy_data.shape[1] == 1
+        try:
+            return self.numpy_data.shape[1] == 1
+        except Exception:
+            return False
+
+    @property
+    def have_one_element(self):
+        try:
+            return self.numpy_data.shape[2] == 1
+        except Exception:
+            return False
 
     @property
     def is_numpy_tensor(self):

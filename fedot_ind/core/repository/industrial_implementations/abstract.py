@@ -1,17 +1,15 @@
-from copy import copy
+from copy import deepcopy
 from functools import partial
 from itertools import chain
 from typing import List, Optional, Union
 
-import pandas as pd
 from fedot.core.constants import default_data_split_ratio_by_task
 from fedot.core.data.array_utilities import atleast_4d
 from fedot.core.data.cv_folds import cv_generator
 from fedot.core.data.data import InputData, OutputData
 from fedot.core.data.data_split import _split_input_data_by_indexes
+from fedot.core.data.merge.data_merger import TSDataMerger, DataMerger, ImageDataMerger, TextDataMerger
 from fedot.core.data.multi_modal import MultiModalData
-from fedot.core.operations.evaluation.operation_implementations.data_operations.ts_transformations import \
-    transform_features_and_target_into_lagged
 from fedot.core.operations.operation_parameters import OperationParameters
 from fedot.core.optimisers.objective import DataSource
 from fedot.core.pipelines.tuning.search_space import PipelineSearchSpace
@@ -24,7 +22,6 @@ from sklearn.model_selection import train_test_split
 
 from fedot_ind.core.architecture.preprocessing.data_convertor import NumpyConverter
 from fedot_ind.core.architecture.settings.computational import backend_methods as np
-from fedot_ind.core.repository.constanst_repository import FEDOT_HEAD_ENSEMBLE
 from fedot_ind.core.tuning.search_space import get_industrial_search_space
 
 
@@ -42,27 +39,10 @@ def split_time_series_industrial(data: InputData,
         forecast_length = data.task.task_params.forecast_length
     if validation_blocks is not None:
         forecast_length *= validation_blocks
-
-    target_length = len(data.target)
-    train_data = _split_input_data_by_indexes(
-        data, index=np.arange(
-            0, target_length - forecast_length), )
-    test_data = _split_input_data_by_indexes(
-        data,
-        index=np.arange(
-            target_length -
-            forecast_length,
-            target_length),
-        retain_first_target=True)
-
-    if validation_blocks is None:
-        # for in-sample
-        test_data.features = train_data.features
-    else:
-        # for out-of-sample
-        test_data.features = data.features
-
-    return train_data, test_data
+    train_data = deepcopy(data)
+    train_data.target = data.features[-forecast_length:]
+    train_data.features = data.features[:-forecast_length]
+    return train_data, data
 
 
 def split_any_industrial(data: InputData,
@@ -88,11 +68,14 @@ def split_any_industrial(data: InputData,
                                                shuffle=shuffle,
                                                random_state=random_seed,
                                                stratify=stratify_labels)
-
+        is_clf_task = data.task.task_type.name.__contains__('classification')
         train_data = _split_input_data_by_indexes(data, index=train_ids)
         test_data = _split_input_data_by_indexes(data, index=test_ids)
-        correct_split = np.unique(test_data.target).shape[0] == np.unique(
-            train_data.target).shape[0]
+        if is_clf_task:
+            correct_split = np.unique(test_data.target).shape[0] == np.unique(
+                train_data.target).shape[0]
+        else:
+            correct_split = True
         return train_data, test_data, correct_split
 
     for ratio in [split_ratio, 0.6, 0.5, 0.4, 0.3, 0.1]:
@@ -150,7 +133,6 @@ def _are_cv_folds_allowed(
 
 
 def build_industrial(self, data: Union[InputData, MultiModalData]) -> DataSource:
-    # define split_ratio
     self.split_ratio = self.split_ratio or default_data_split_ratio_by_task[
         data.task.task_type]
 
@@ -169,7 +151,13 @@ def build_industrial(self, data: Union[InputData, MultiModalData]) -> DataSource
 
     # Calculate the number of validation blocks for timeseries forecasting
     if data.task.task_type is TaskTypesEnum.ts_forecasting and self.validation_blocks is None:
+        current_split_ratio = self.split_ratio
+        # workaround for compability with basic Fedot
+        # copy_input = deepcopy(data)
+        data.target = data.features
         self._propose_cv_folds_and_validation_blocks(data)
+        if self.cv_folds is None:
+            self.split_ratio = current_split_ratio
 
     # Check split_ratio
     if self.cv_folds is None and not (0 < self.split_ratio < 1):
@@ -210,174 +198,31 @@ def build_industrial(self, data: Union[InputData, MultiModalData]) -> DataSource
     return data_producer
 
 
-def build_tuner(self, model_to_tune, tuning_params, train_data, mode):
+def build_tuner(self, model_to_tune, tuning_params, train_data):
     def _create_tuner(tuning_params, tuning_data):
         custom_search_space = get_industrial_search_space(self)
         search_space = PipelineSearchSpace(custom_search_space=custom_search_space,
                                            replace_default_search_space=True)
-        pipeline_tuner = TunerBuilder(
-            train_data.task).with_search_space(search_space).with_tuner(
-            tuning_params['tuner']).with_n_jobs(1).with_metric(
-            tuning_params['metric']).with_timeout(
-            tuning_params.get(
-                'tuning_timeout',
-                15)).with_early_stopping_rounds(
-            tuning_params.get(
-                'tuning_early_stop',
-                50)).with_iterations(
-            tuning_params.get(
-                'tuning_iterations',
-                150)).build(tuning_data)
+        pipeline_tuner = TunerBuilder(train_data.task). \
+            with_search_space(search_space). \
+            with_tuner(tuning_params['tuner']). \
+            with_cv_folds(tuning_params.get('cv_folds', None)). \
+            with_n_jobs(tuning_params.get('n_jobs', 1)). \
+            with_metric(tuning_params['metric']). \
+            with_iterations(tuning_params.get('tuning_iterations', 50)). \
+            build(tuning_data)
+
         return pipeline_tuner
 
-    if isinstance(model_to_tune, dict):
-        for model_name, model in model_to_tune.items():
-            pipeline_tuner = _create_tuner(tuning_params, model['train_fold_data'])
-            tuned_model = model['composite_pipeline']
-            if not tuned_model.is_fitted:
-                tuned_model = pipeline_tuner.tune(tuned_model)
-                tuned_model.fit(model['train_fold_data'])
-            model['composite_pipeline'] = tuned_model
-    else:
-        pipeline_tuner = _create_tuner(tuning_params, train_data)
-        if mode == 'full':
-            batch_pipelines = [automl_branch for automl_branch in self.solver.current_pipeline.nodes if
-                               automl_branch.name in FEDOT_HEAD_ENSEMBLE]
-            for b_pipeline in batch_pipelines:
-                b_pipeline.fitted_operation.current_pipeline = pipeline_tuner.tune(
-                    b_pipeline.fitted_operation.current_pipeline)
-                b_pipeline.fitted_operation.current_pipeline.fit(train_data)
-        model_to_tune = pipeline_tuner.tune(model_to_tune)
-        model_to_tune.fit(train_data)
-    return pipeline_tuner, model_to_tune
+    pipeline_tuner = _create_tuner(tuning_params, train_data)
+    model_to_tune = pipeline_tuner.tune(model_to_tune)
+    model_to_tune.fit(train_data)
+    return model_to_tune
 
 
 def postprocess_industrial_predicts(self, merged_predicts: np.array) -> np.array:
     """ Post-process merged predictions (e.g. reshape). """
     return merged_predicts
-
-
-def transform_lagged_industrial(self, input_data: InputData):
-    train_data = copy(input_data)
-    forecast_length = train_data.task.task_params.forecast_length
-
-    # Correct window size parameter
-    self._check_and_correct_window_size(train_data.features, forecast_length)
-    window_size = self.window_size
-    new_idx, transformed_cols, new_target = transform_features_and_target_into_lagged(
-        train_data, forecast_length, window_size)
-
-    # Update target for Input Data
-    if new_target.shape[0] != 0:
-        train_data.target = new_target
-        train_data.idx = new_idx
-    else:
-        train_data = input_data
-    output_data = self._convert_to_output(train_data,
-                                          transformed_cols,
-                                          data_type=DataTypesEnum.image)
-    return output_data
-
-
-def transform_smoothing_industrial(self, input_data: InputData) -> OutputData:
-    """Method for smoothing time series
-
-    Args:
-        input_data: data with features, target and ids to process
-
-    Returns:
-        output data with smoothed time series
-    """
-
-    source_ts = input_data.features
-    if input_data.data_type == DataTypesEnum.multi_ts:
-        full_smoothed_ts = []
-        for ts_n in range(source_ts.shape[1]):
-            ts = pd.Series(source_ts[:, ts_n])
-            smoothed_ts = self._apply_smoothing_to_series(ts)
-            full_smoothed_ts.append(smoothed_ts)
-        output_data = self._convert_to_output(input_data,
-                                              np.array(full_smoothed_ts).T,
-                                              data_type=input_data.data_type)
-    else:
-        source_ts = pd.Series(input_data.features.flatten())
-        smoothed_ts = np.ravel(self._apply_smoothing_to_series(source_ts))
-        output_data = self._convert_to_output(input_data,
-                                              smoothed_ts,
-                                              data_type=input_data.data_type)
-
-    return output_data
-
-
-def _check_and_correct_window_size_industrial(
-        self,
-        time_series: np.ndarray,
-        forecast_length: int):
-    """ Method check if the length of the time series is not enough for
-        lagged transformation
-
-        Args:
-            time_series: time series for transformation
-            forecast_length: forecast length
-
-        Returns:
-
-        """
-    max_allowed_window_size = max(
-        1, round((len(time_series) - forecast_length - 1) * 0.25))
-    window_list = list(
-        range(
-            3 *
-            forecast_length,
-            max_allowed_window_size,
-            round(
-                1.5 *
-                forecast_length)))
-
-    if self.window_size == 0 or self.window_size > max_allowed_window_size:
-        try:
-            window_size = np.random.choice(window_list)
-        except Exception:
-            window_size = 3 * forecast_length
-        self.log.message(
-            (f"Window size of lagged transformation was changed "
-             f"by WindowSizeSelector from {self.params.get('window_size')} to {window_size}"))
-        self.params.update(window_size=window_size)
-
-    # Minimum threshold
-    if self.window_size < self.window_size_minimum:
-        self.log.info(
-            (f"Warning: window size of lagged transformation was changed "
-             f"from {self.params.get('window_size')} to {self.window_size_minimum}"))
-        self.params.update(window_size=self.window_size_minimum)
-
-
-def transform_lagged_for_fit_industrial(self, input_data: InputData) -> OutputData:
-    """Method for transformation of time series to lagged form for fit stage
-
-    Args:
-        input_data: data with features, target and ids to process
-
-    Returns:
-        output data with transformed features table
-    """
-    input_data.features = input_data.features.squeeze()
-    new_input_data = copy(input_data)
-    forecast_length = new_input_data.task.task_params.forecast_length
-    # Correct window size parameter
-    self._check_and_correct_window_size(
-        new_input_data.features, forecast_length)
-    window_size = self.window_size
-    new_idx, transformed_cols, new_target = transform_features_and_target_into_lagged(
-        input_data, forecast_length, window_size)
-
-    # Update target for Input Data
-    new_input_data.target = new_target
-    new_input_data.idx = new_idx
-    output_data = self._convert_to_output(new_input_data,
-                                          transformed_cols,
-                                          data_type=DataTypesEnum.image)
-    return output_data
 
 
 def update_column_types_industrial(self, output_data: OutputData):
@@ -412,20 +257,57 @@ def preprocess_industrial_predicts(*args) -> List[np.array]:
         return reshaped_predicts
 
 
+def find_main_output_industrial(outputs: List['OutputData']) -> 'OutputData':
+    """ Returns first output with main target or (if there are
+    no main targets) the output with priority secondary target. """
+    combine_ts_and_multi_ts = outputs[0].data_type.value.__contains__('time') and len(outputs) != 1
+    if combine_ts_and_multi_ts:
+        try:
+            priority_output = [x for x in outputs if len(x.target.shape) < 2][0]
+        except Exception:
+            priority_output = outputs[0]  # [x for x in outputs if len(x.target.shape) < 2][0]
+    else:
+        priority_output = next((output for output in outputs
+                                if output.supplementary_data.is_main_target), None)
+        if not priority_output:
+            flow_lengths = [output.supplementary_data.data_flow_length for output in outputs]
+            i_priority_secondary = np.argmin(flow_lengths)
+            priority_output = outputs[i_priority_secondary]
+    return priority_output
+
+
+def get_merger_industrial(outputs: List['OutputData']) -> 'DataMerger':
+    """ Construct appropriate data merger for the outputs. """
+
+    # Ensure outputs can be merged
+    list_of_datatype = [output.data_type for output in outputs]
+    if DataTypesEnum.ts in list_of_datatype:
+        for output in outputs:
+            output.data_type = DataTypesEnum.ts
+    data_type = DataMerger.get_datatype_for_merge(output.data_type for output in outputs)
+    if data_type is None:
+        raise ValueError("Can't merge different data types")
+
+    merger_by_type = {
+        DataTypesEnum.table: DataMerger,
+        DataTypesEnum.ts: TSDataMerger,
+        DataTypesEnum.multi_ts: TSDataMerger,
+        DataTypesEnum.image: ImageDataMerger,
+        DataTypesEnum.text: TextDataMerger,
+    }
+    cls = merger_by_type.get(data_type)
+    if not cls:
+        raise ValueError(f'Unable to merge data type {cls}')
+    return cls(outputs, data_type)
+
+
 def merge_industrial_targets(self) -> np.array:
     filtered_main_target = self.main_output.target
-    # if target has the same form as index
-    #  then it makes sense to extract target with common indices
-    if filtered_main_target is not None and len(
-            self.main_output.idx) == len(filtered_main_target):
-        filtered_main_target = self.select_common(
-            self.main_output.idx, filtered_main_target)
     return filtered_main_target
 
 
 def merge_industrial_predicts(*args) -> np.array:
     predicts = args[1]
-
     predicts = [NumpyConverter(
         data=prediction).convert_to_torch_format() for prediction in predicts]
     sample_shape, channel_shape, elem_shape = [
@@ -438,16 +320,17 @@ def merge_industrial_predicts(*args) -> np.array:
     channel_match = all(chanel_concat)
     element_match = all(element_wise_concat)
     sample_match = all(sample_wise_concat)
-
     if sample_match and element_match:
-        return np.concatenate(predicts, axis=1)
+        predict = np.concatenate(predicts, axis=1)
     elif sample_match and channel_match:
-        return np.concatenate(predicts, axis=2)
+        predict = np.concatenate(predicts, axis=2)
     else:
         prediction_2d = np.concatenate(
             [x.reshape(x.shape[0], x.shape[1] * x.shape[2]) for x in predicts], axis=1)
-        return prediction_2d.reshape(
+        predict = prediction_2d.reshape(
             prediction_2d.shape[0], 1, prediction_2d.shape[1])
+
+    return predict
 
 
 def fit_topo_extractor_industrial(self, input_data: InputData):
@@ -502,6 +385,10 @@ def predict_operation_industrial(
             trained_operation=fitted_operation,
             predict_data=data,
             output_mode=output_mode)
+    try:
+        prediction.predict = prediction.predict.detach().numpy()
+    except Exception:
+        _ = 1
     prediction = self.assign_tabular_column_types(prediction, output_mode)
 
     # any inplace operations here are dangerous!

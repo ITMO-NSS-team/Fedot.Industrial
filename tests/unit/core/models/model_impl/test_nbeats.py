@@ -24,15 +24,15 @@ def ts_input_data():
 
 
 def test_nbeats_model(ts_input_data):
+    IndustrialModels().setup_repository()
     train, test = ts_input_data
+    model = PipelineBuilder().add_node('nbeats_model', params=dict(
+        backcast_length=10,
+        forecast_length=5,
+        epochs=10
+    )).build()
 
-    with IndustrialModels():
-        model = PipelineBuilder().add_node('nbeats_model', params=dict(
-            backcast_length=10,
-            forecast_length=5,
-            epochs=10
-        )).build()
+    model.fit(train)
+    forecast = model.predict(test)
 
-        model.fit(train)
-        forecast = model.predict(test)
-        assert len(forecast.predict) == 5
+    assert len(forecast.predict) == 5

@@ -24,14 +24,15 @@ def matrix_from_ts():
 
 @pytest.fixture()
 def singular_values_rank_threshold_beta():
-    return [0.1, 0.2, 0.3, 0.4, 0.5], 3, 0.5, 0.5
+    return [531.37055486, 159.02909926, 121.41838726, 108.69788252,
+            88.76097787, 59.24177627, 54.45026082, 39.17247824,
+            26.70158246, 7.55227637], 3, 0.5, 0.5
 
 
 def test_sv_to_explained_variance_ratio(singular_values_rank_threshold_beta):
     singular_values, rank, _, _ = singular_values_rank_threshold_beta
-    explained_variance, n_components = sv_to_explained_variance_ratio(
-        singular_values, rank)
-    assert 0 < explained_variance <= 100
+    explained_variance = sv_to_explained_variance_ratio(singular_values)
+    assert 0 < sum(explained_variance) <= 100
 
 
 def test_singular_value_hard_threshold(singular_values_rank_threshold_beta):

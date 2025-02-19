@@ -1,5 +1,5 @@
 
-from fedot_ind.api.utils.data import init_input_data
+from fedot_ind.core.operation.dummy.dummy_operation import init_input_data
 from fedot_ind.core.architecture.settings.computational import backend_methods as np
 from fedot_ind.core.operation.transformation.basis.eigen_basis import EigenBasisImplementation
 from fedot_ind.tools.synthetic.ts_datasets_generator import TimeSeriesDatasetsGenerator
@@ -36,6 +36,7 @@ def test_transform_one_sample():
     basis.SV_threshold = 3
     sample = input_train_data.features[0]
     transformed_sample = basis._transform_one_sample(sample)
+    transformed_sample = transformed_sample.compute()
     assert isinstance(transformed_sample, np.ndarray)
     assert transformed_sample.shape[0] == basis.SV_threshold
     assert transformed_sample.shape[1] == len(sample)

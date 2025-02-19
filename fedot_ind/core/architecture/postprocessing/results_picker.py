@@ -4,7 +4,7 @@ from typing import Union
 
 import pandas as pd
 
-from fedot_ind.api.utils.path_lib import DS_INFO_PATH, PROJECT_PATH
+from fedot_ind.tools.serialisation.path_lib import DS_INFO_PATH, PROJECT_PATH
 
 
 class ResultsPicker:

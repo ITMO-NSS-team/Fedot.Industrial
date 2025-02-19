@@ -1,19 +1,20 @@
 from copy import copy
+
 import numpy as np
+import optuna
 import statsmodels.api as sm
+from fedot.core.data.data import InputData, OutputData
+from fedot.core.operations.evaluation.operation_implementations.data_operations.ts_transformations import ts_to_table
+from fedot.core.operations.evaluation.operation_implementations.implementation_interfaces import ModelImplementation
+from fedot.core.operations.operation_parameters import OperationParameters
 from fedot.core.pipelines.pipeline_builder import PipelineBuilder
+from fedot.core.repository.dataset_types import DataTypesEnum
 from fedot.core.repository.metrics_repository import RegressionMetricsEnum
 from golem.core.tuning.optuna_tuner import OptunaTuner
 from scipy.stats import kurtosis, skew
 from statsmodels.genmod.families import Gamma, Gaussian, InverseGaussian
 from statsmodels.genmod.families.links import inverse_squared, log as lg
 from statsmodels.genmod.generalized_linear_model import GLM
-
-from fedot.core.data.data import InputData, OutputData
-from fedot.core.operations.evaluation.operation_implementations.data_operations.ts_transformations import ts_to_table
-from fedot.core.operations.evaluation.operation_implementations.implementation_interfaces import ModelImplementation
-from fedot.core.operations.operation_parameters import OperationParameters
-from fedot.core.repository.dataset_types import DataTypesEnum
 
 from fedot_ind.core.repository.industrial_implementations.abstract import build_tuner
 
@@ -34,9 +35,10 @@ class GLMIndustrial(ModelImplementation):
         self.ar_tuning_params = dict(
             tuner=OptunaTuner,
             metric=RegressionMetricsEnum.RMSE,
-            tuning_timeout=3,
+            tuning_timeout=1,
             tuning_early_stop=20,
             tuning_iterations=50)
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
 
     @property
     def family(self) -> str:
@@ -48,8 +50,8 @@ class GLMIndustrial(ModelImplementation):
 
     def _check_glm_params(self, mean_kurtosis, mean_skew):
         if np.logical_or(
-                mean_kurtosis < -1,
-                mean_kurtosis > 1) and np.logical_or(
+            mean_kurtosis < -1,
+            mean_kurtosis > 1) and np.logical_or(
                 mean_skew < -0.2,
                 mean_skew > 0.2):
             family = 'gamma'
@@ -60,8 +62,10 @@ class GLMIndustrial(ModelImplementation):
         return family
 
     def fit(self, input_data):
-        pipeline_tuner, tuned_model = build_tuner(
-            self, self.auto_reg, self.ar_tuning_params, input_data, 'head')
+        tuned_model = build_tuner(self,
+                                  model_to_tune=self.auto_reg,
+                                  tuning_params=self.ar_tuning_params,
+                                  train_data=input_data)
         self.auto_reg = tuned_model
         residual = self.auto_reg.root_node.fitted_operation[0].autoreg.resid
         residual = np.nan_to_num(residual, nan=0, posinf=0, neginf=0)
@@ -69,11 +73,10 @@ class GLMIndustrial(ModelImplementation):
         self.family_link = self.family_distribution[family]
         self.exog_residual = sm.add_constant(
             np.arange(0, residual.shape[0]).astype("float64")).reshape(-1, 2)
-        self.model = GLM(
-            exog=self.exog_residual,
-            endog=residual.astype("float64").reshape(-1, 1),
-            family=self.family_link
-        ).fit(method="lbfgs")
+        self.model = GLM(exog=self.exog_residual, endog=residual.astype("float64").reshape(-1, 1),
+                         family=self.family_link
+                         ).fit(method="lbfgs")
+        del self.ar_tuning_params
         return self.model
 
     def predict(self, input_data):

@@ -1,22 +1,44 @@
 from copy import deepcopy
-from typing import Optional, Any
+from typing import Any, Optional
 
 import pandas as pd
-from MKLpy.callbacks import EarlyStopping
-from MKLpy.scheduler import ReduceOnWorsening
 from fedot.core.data.data import InputData
 from fedot.core.operations.operation_parameters import OperationParameters
 from fedot.core.pipelines.pipeline_builder import PipelineBuilder
+from MKLpy.callbacks import EarlyStopping
+from MKLpy.scheduler import ReduceOnWorsening
 from scipy.spatial.distance import pdist, squareform
 from sklearn.svm import SVC
 
 from fedot_ind.core.architecture.settings.computational import backend_methods as np
 from fedot_ind.core.models.base_extractor import BaseExtractor
-from fedot_ind.core.repository.constanst_repository import KERNEL_ALGO, KERNEL_BASELINE_FEATURE_GENERATORS, \
-    KERNEL_BASELINE_NODE_LIST, KERNEL_DISTANCE_METRIC, get_default_industrial_model_params
+from fedot_ind.core.repository.constanst_repository import (
+    KERNEL_ALGO,
+    KERNEL_BASELINE_FEATURE_GENERATORS,
+    KERNEL_BASELINE_NODE_LIST,
+    KERNEL_DISTANCE_METRIC,
+    get_default_industrial_model_params,
+)
 
 
 class KernelEnsembler(BaseExtractor):
+    """
+    Class for kernel ensembling. This class implements a kernel-based ensemble method for feature
+    extraction and classification. It supports both one-stage and two-stage kernel learning
+    strategies and can handle multiclass classification problems.
+
+    Args:
+        params (Optional[OperationParameters]): Parameters of the operation
+
+    Attributes:
+        distance_metric (str): The distance metric used to calculate the Gram matrix
+        kernel_strategy (str): The kernel learning strategy used by the model
+        learning_strategy (str): The learning strategy used by the model
+        head_model (str): The head model used by the model
+        feature_extractor (List[str]): The feature extractors used by the model
+
+    """
+
     def __init__(self, params: Optional[OperationParameters] = None):
         super().__init__(params)
         self.distance_metric = params.get('distance_metric', KERNEL_DISTANCE_METRIC['default_metric'])
@@ -26,16 +48,14 @@ class KernelEnsembler(BaseExtractor):
         self.feature_extractor = params.get('feature_extractor', list(
             KERNEL_BASELINE_FEATURE_GENERATORS.keys()))
 
-        self._mapping_dict = {k: v for k,
-                              v in enumerate(self.feature_extractor)}
+        self._mapping_dict = {k: v for k, v in enumerate(self.feature_extractor)}
         self.lr = params.get('learning_rate', 0.1)
         self.patience = params.get('patience', 5)
         self.epoch = params.get('epoch', 500)
         self.optimisation_metric = params.get('optimisation_metric', 'roc_auc')
 
         self.algo_impl_dict = {'one_step': self.__one_stage_kernel,
-                               'two_step': self.__two_stage_kernel
-                               }
+                               'two_step': self.__two_stage_kernel}
 
         self.feature_matrix_train = []
         self.feature_matrix_test = []
@@ -129,16 +149,21 @@ class KernelEnsembler(BaseExtractor):
         """
         self.__multiclass_check(input_data.target)
         grammian_list = self.generate_grammian(input_data)
+
         if self.kernel_strategy.__contains__('one'):
-            kernel_weight_matrix = self.__one_stage_kernel(
-                grammian_list, input_data.target)
+            kernel_weight_matrix = self.__one_stage_kernel(grammian_list, input_data.target)
+
         else:
-            kernel_weight_matrix = self.__two_stage_kernel(
-                grammian_list, input_data.target)
-        top_n_generators, classes_described_by_generator = self._select_top_feature_generators(
-            kernel_weight_matrix)
+            kernel_weight_matrix = self.__two_stage_kernel(grammian_list, input_data.target)
+
+        top_n_generators, classes_described_by_generator = self._select_top_feature_generators(kernel_weight_matrix)
+
         self.predict = self._create_kernel_ensemble(
-            input_data, top_n_generators, classes_described_by_generator)
+            input_data,
+            top_n_generators,
+            classes_described_by_generator
+        )
+
         return self.predict
 
     def generate_grammian(self, input_data) -> list[Any]:
@@ -148,8 +173,8 @@ class KernelEnsembler(BaseExtractor):
         self.feature_matrix_train = [
             x.reshape(
                 x.shape[0],
-                x.shape[1] *
-                x.shape[2]) for x in self.feature_matrix_train]
+                x.shape[1] * x.shape[2]
+            ) for x in self.feature_matrix_train]
         KLtr = [squareform(pdist(X=feature, metric=self.distance_metric))
                 for feature in self.feature_matrix_train]
         return KLtr

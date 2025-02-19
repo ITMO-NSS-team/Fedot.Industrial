@@ -3,12 +3,12 @@ from enum import Enum
 from fedot_ind.core.models.detection.probalistic.kalman import UnscentedKalmanFilter
 from fedot_ind.core.models.detection.subspaces.func_pca import FunctionalPCA
 from fedot_ind.core.models.detection.subspaces.sst import SingularSpectrumTransformation
-from fedot_ind.core.models.quantile.quantile_extractor import QuantileExtractor
-from fedot_ind.core.models.recurrence.reccurence_extractor import RecurrenceExtractor
-from fedot_ind.core.models.topological.topological_extractor import TopologicalExtractor
 from fedot_ind.core.operation.transformation.basis.eigen_basis import EigenBasisImplementation
 from fedot_ind.core.operation.transformation.basis.fourier import FourierBasisImplementation
 from fedot_ind.core.operation.transformation.basis.wavelet import WaveletBasisImplementation
+from fedot_ind.core.operation.transformation.representation.recurrence.recurrence_extractor import RecurrenceExtractor
+from fedot_ind.core.operation.transformation.representation.statistical.quantile_extractor import QuantileExtractor
+from fedot_ind.core.operation.transformation.representation.topological.topological_extractor import TopologicalExtractor
 
 
 class BasisTransformations(Enum):
@@ -30,31 +30,31 @@ class MlModel(Enum):
 
 
 class KernelFeatureGenerator(Enum):
-    quantile = [{'feature_generator_type': 'quantile',
+    quantile = [{'feature_generator_type': 'statistical',
                  'feature_hyperparams': {
                      'window_mode': True,
                      'window_size': 5
                  }
                  },
-                {'feature_generator_type': 'quantile',
+                {'feature_generator_type': 'statistical',
                  'feature_hyperparams': {
                      'window_mode': True,
                      'window_size': 10
                  }
                  },
-                {'feature_generator_type': 'quantile',
+                {'feature_generator_type': 'statistical',
                  'feature_hyperparams': {
                      'window_mode': True,
                      'window_size': 20
                  }
                  },
-                {'feature_generator_type': 'quantile',
+                {'feature_generator_type': 'statistical',
                  'feature_hyperparams': {
                      'window_mode': True,
                      'window_size': 30
                  }
                  },
-                {'feature_generator_type': 'quantile',
+                {'feature_generator_type': 'statistical',
                  'feature_hyperparams': {
                      'window_mode': True,
                      'window_size': 40

@@ -10,10 +10,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     strategy:
       matrix:
-        python-version: [3.9, '3.10']
+        python-version: [3.9, '3.10', '3.11']
 
     steps:
       - uses: actions/checkout@v2
@@ -23,7 +23,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Cache Poetry virtualenv
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         with:
           path: ~/.local/share/poetry/virtualenvs/  # Cache Poetry virtualenvs
           key: ${{ runner.os }}-poetry-${{ hashFiles('pyproject.toml') }}  # Cache key based on project dependencies
@@ -39,7 +39,7 @@ jobs:
         run: poetry install
 
       - name: Run tests with pytest
-        run: poetry run pytest --cov=fedot_ind --cov-report xml:coverage.xml tests/unit
+        run: poetry run pytest --cov=fedot_ind --cov-report xml:coverage.xml tests/unit -vvv
 
       - name: Codecov-coverage
         uses: codecov/codecov-action@v4

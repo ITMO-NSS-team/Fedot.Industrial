@@ -2,7 +2,7 @@ import numpy as np
 from fedot.core.pipelines.pipeline import Pipeline
 from sklearn.base import BaseEstimator, ClassifierMixin
 
-from fedot_ind.api.utils.data import init_input_data
+from fedot_ind.core.architecture.preprocessing.data_convertor import NumpyConverter
 
 
 class SklearnCompatibleClassifier(BaseEstimator, ClassifierMixin):
@@ -18,14 +18,17 @@ class SklearnCompatibleClassifier(BaseEstimator, ClassifierMixin):
         self.classes_ = None
 
     def fit(self, X, y):
-        self.estimator.fit(init_input_data(X, y))
-        self.classes_ = np.unique(y)
+        features, target = NumpyConverter(X).numpy_data, NumpyConverter(y).numpy_data
+        self.estimator.fit(features, target)
+        self.classes_ = np.unique(target)
         return self
 
     def predict(self, X):
-        labels = self.estimator.predict(init_input_data(X, None)).predict
+        features = NumpyConverter(X).numpy_data
+        labels = self.estimator.predict(features).predict
         return labels
 
     def predict_proba(self, X):
-        probs = self.estimator.predict(init_input_data(X, None), output_mode='probs').predict
+        features = NumpyConverter(X).numpy_data
+        probs = self.estimator.predict(features, output_mode='probs').predict
         return probs

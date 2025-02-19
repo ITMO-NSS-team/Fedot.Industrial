@@ -1,6 +1,6 @@
 import pytest
 
-from fedot_ind.api.utils.metafeatures import MetaFeaturesDetector
+from fedot_ind.tools.explain.metafeatures import MetaFeaturesDetector
 from fedot_ind.tools.synthetic.ts_datasets_generator import TimeSeriesDatasetsGenerator
 
 

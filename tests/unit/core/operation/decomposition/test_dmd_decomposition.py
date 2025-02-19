@@ -1,6 +1,7 @@
 import numpy as np
 
-from fedot_ind.core.operation.decomposition.matrix_decomposition.dmd_decomposition import orthogonal_dmd_decompose, \
+from fedot_ind.core.operation.decomposition.matrix_decomposition.method_impl.dmd_decomposition import \
+    orthogonal_dmd_decompose, \
     rq, symmetric_decompose
 
 

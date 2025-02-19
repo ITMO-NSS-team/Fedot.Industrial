@@ -15,13 +15,13 @@ from sklearn.linear_model import (
 )
 from sklearn.naive_bayes import BernoulliNB as SklearnBernoulliNB, MultinomialNB as SklearnMultinomialNB
 
-from fedot_ind.core.models.manifold.riemann_embeding import RiemannExtractor
-from fedot_ind.core.models.nn.network_impl.dummy_nn import DummyOverComplicatedNeuralNetwork
-from fedot_ind.core.models.nn.network_impl.explainable_convolution_model import XCModel
+from fedot_ind.core.models.nn.network_impl.common_model.dummy_nn import DummyOverComplicatedNeuralNetwork
+from fedot_ind.core.models.nn.network_impl.feature_extraction.explainable_convolution_model import XCModel
+from fedot_ind.core.models.nn.network_impl.forecasting_model.tst import TSTModel
 from fedot_ind.core.models.nn.network_impl.lora_nn import LoraModel
-from fedot_ind.core.models.nn.network_impl.tst import TSTModel
 from fedot_ind.core.operation.dummy.dummy_operation import DummyOperation
 from fedot_ind.core.operation.filtration.feature_filtration import FeatureFilter
+from fedot_ind.core.operation.transformation.representation.manifold.riemann_embeding import RiemannExtractor
 
 EXCLUDED_OPERATION_MUTATION = {
     'regression': ['recurrence_extractor',
@@ -35,6 +35,7 @@ EXCLUDED_OPERATION_MUTATION = {
     'anomaly_detection': ['inception_model',
                           'resnet_model',
                           'recurrence_extractor',
+
                           'xgbreg',
                           'sgdr',
                           'kernel_pca',
@@ -52,28 +53,42 @@ EXCLUDED_OPERATION_MUTATION = {
                           'dtreg'
                           ],
     'ts_forecasting': [
+        # exclude bad perfomance boosting
         'xgbreg',
+        'lgbmreg',
+        # exclude weak stat models
         'stl_arima',
         'ets',
         'cgru',
+        'glm'
+        # exclude weak regression models
         'sgdr',
+        'treg',
+        'knnreg',
+        'pdl_reg',
+        'dtreg',
+        # exclude almost all feature transform models
         'topological_extractor',
         'kernel_pca',
         'resample',
-        'inception_model',
         'simple_imputation',
         'channel_filtration',
         'recurrence_extractor',
         'quantile_extractor',
         'riemann_extractor',
         'minirocket_extractor',
-        'treg',
-        'knnreg',
+        'lagged',
+        'eigen_basis',
+        'fourier_basis',
+        'wavelet_basis',
+        # exclude? unstable nn models
+        'inception_model',
         'resnet_model',
-        'dtreg'
+        'tcn_model'
     ],
     'classification': [
         'resnet_model',
+        'one_class_svm',
         'knnreg',
         'recurrence_extractor',
         'bernb',

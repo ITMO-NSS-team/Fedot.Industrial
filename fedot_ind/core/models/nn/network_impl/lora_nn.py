@@ -1,22 +1,23 @@
 from typing import Optional
 
 import torch
+import torch.nn.utils.parametrize as parametrize
 from fedot.core.data.data import InputData
 from fedot.core.operations.operation_parameters import OperationParameters
-from torch import nn, optim
 from torch import Tensor
+from torch import nn, optim
+
 from fedot_ind.core.architecture.abstraction.decorators import convert_to_3d_torch_array
 from fedot_ind.core.architecture.settings.computational import default_device
 from fedot_ind.core.models.nn.network_impl.base_nn_model import BaseNeuralModel
-from fedot_ind.core.operation.decomposition.matrix_decomposition.power_iteration_decomposition import RSVDDecomposition
-import torch.nn.utils.parametrize as parametrize
-
-from fedot_ind.core.models.nn.network_impl.dummy_nn import DummyOverComplicatedNeuralNetwork
-from fedot_ind.core.models.nn.network_impl.explainable_convolution_model import XCModel
-from fedot_ind.core.models.nn.network_impl.inception import InceptionTimeModel
-from fedot_ind.core.models.nn.network_impl.nbeats import NBeatsModel
-from fedot_ind.core.models.nn.network_impl.resnet import ResNetModel
-from fedot_ind.core.models.nn.network_impl.tst import TSTModel
+from fedot_ind.core.models.nn.network_impl.common_model.dummy_nn import DummyOverComplicatedNeuralNetwork
+from fedot_ind.core.models.nn.network_impl.common_model.inception import InceptionTimeModel
+from fedot_ind.core.models.nn.network_impl.common_model.resnet import ResNetModel
+from fedot_ind.core.models.nn.network_impl.feature_extraction.explainable_convolution_model import XCModel
+from fedot_ind.core.models.nn.network_impl.forecasting_model.nbeats import NBeatsModel
+from fedot_ind.core.models.nn.network_impl.forecasting_model.tst import TSTModel
+from fedot_ind.core.operation.decomposition.matrix_decomposition.method_impl.power_iteration_decomposition import \
+    RSVDDecomposition
 
 NEURAL_MODEL = {
     # fundamental models
